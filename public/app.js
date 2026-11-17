@@ -19,7 +19,7 @@ const seed = {
 };
 let state;
 try { state = JSON.parse(localStorage.getItem(key)) || structuredClone(seed); if (!Array.isArray(state.notes)) state.notes=[]; } catch { state=structuredClone(seed); }
-let selected=null, tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null, cropSource=null, cropRect=null, cropStart=null;
+let selected=null, tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null;
 const undo=[], redo=[];
 function snapshot(){undo.push(JSON.stringify(state));if(undo.length>30)undo.shift();redo.length=0;}
 function commit(){localStorage.setItem(key,JSON.stringify(state));render();}
@@ -65,32 +65,26 @@ $('redoBtn').onclick=()=>{if(!redo.length)return;undo.push(JSON.stringify(state)
 $('exportData').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));a.download='contexty-canvas.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
 $('importData').onclick=()=>$('importFile').click();
 $('importFile').onchange=async event=>{try{const data=JSON.parse(await event.target.files[0].text());if(!Array.isArray(data.groups)||!Array.isArray(data.cards))throw Error('格式不正确');snapshot();state={...data,notes:data.notes||[]};commit()}catch(error){alert(error.message)}};
-let cropStartLocal=null;
 function startCapture(text='',image=null,source='手动添加'){capture={text,image,source};$('capturePreview').innerHTML=image?`<img src="${image}" alt="捕捉的屏幕区域">`:clean(text||'空白素材卡片');$('captureMemo').value='';$('captureDialog').showModal()}
 $('captureCancel').onclick=()=>$('captureDialog').close();
 $('addCard').onclick=()=>startCapture();
 $('captureText').onclick=async()=>{try{const text=await navigator.clipboard.readText();if(!text.trim())throw Error('剪贴板里没有文字');startCapture(text,null,'剪贴板选中文字')}catch(error){alert(`读取剪贴板失败：${error.message}。请使用画布底部的“＋”手动添加。`)}};
-$('captureForm').onsubmit=async event=>{
-  event.preventDefault();const memo=$('captureMemo').value.trim();if(!memo)return;
+async function saveCapture(item,memo,closeDialog=false){
+  if(!memo)return;
   snapshot();const tags=[...new Set((state.topic.match(/[\p{Script=Han}]{2,4}/gu)||[]).slice(0,2))];
-  const card={id:uid(),title:(capture.text||memo).slice(0,18),text:capture.text||'',source:capture.source,memo,tags,intent:inferIntent(memo),interpretMode:'rule',groupId:null,status:/以后|未来|下次/.test(memo)?'future':'current',image:capture.image,x:Math.max(30,160-pan.x/scale)+state.cards.length*30,y:Math.max(70,150-pan.y/scale)+state.cards.length*20,createdAt:Date.now(),corrections:0};
+  const card={id:uid(),title:(item.text||memo).slice(0,18),text:item.text||'',source:item.source,memo,tags,intent:inferIntent(memo),interpretMode:'rule',groupId:null,status:/以后|未来|下次/.test(memo)?'future':'current',image:item.image,x:Math.max(30,160-pan.x/scale)+state.cards.length*30,y:Math.max(70,150-pan.y/scale)+state.cards.length*20,createdAt:item.createdAt||Date.now(),corrections:0};
   card.groupId=suggestGroup(card,state.groups);
   if(card.groupId){const group=state.groups.find(g=>g.id===card.groupId);card.x=group.x+30+(state.cards.filter(c=>c.groupId===group.id).length%2)*295;card.y=group.y+55+Math.floor(state.cards.filter(c=>c.groupId===group.id).length/2)*280}
-  state.cards.push(card);$('captureDialog').close();commit();focusItem(card.id);
+  state.cards.push(card);if(closeDialog)$('captureDialog').close();commit();focusItem(card.id);
   try{
     const response=await fetch('/api/interpret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:card.text,memo:card.memo,image:card.image,topic:state.topic,groups:state.groups})});
     const result=await response.json();if(!response.ok)throw Error(result.error);
     if(result.mode==='ai'&&state.cards.includes(card)&&card.corrections===0){snapshot();card.title=result.title;card.intent=result.intent;card.tags=result.tags;card.interpretMode='ai';if(result.groupId){card.groupId=result.groupId;const group=state.groups.find(g=>g.id===result.groupId);card.x=group.x+25;card.y=group.y+60+state.cards.filter(c=>c.groupId===group.id&&c.id!==card.id).length*170}commit()}
   }catch(error){console.warn('素材理解暂时不可用',error)}
-};
-$('captureScreen').onclick=async()=>{try{const stream=await navigator.mediaDevices.getDisplayMedia({video:true});const video=document.createElement('video');video.srcObject=stream;await video.play();cropSource=document.createElement('canvas');cropSource.width=Math.min(1300,video.videoWidth);cropSource.height=Math.round(video.videoHeight*cropSource.width/video.videoWidth);cropSource.getContext('2d').drawImage(video,0,0,cropSource.width,cropSource.height);stream.getTracks().forEach(track=>track.stop());$('cropCanvas').width=cropSource.width;$('cropCanvas').height=cropSource.height;cropRect=null;drawCrop();$('cropDialog').showModal()}catch(error){if(error.name!=='NotAllowedError')alert(error.message)}};
-function cropPoint(event){const box=$('cropCanvas').getBoundingClientRect();return{x:Math.round((event.clientX-box.left)*$('cropCanvas').width/box.width),y:Math.round((event.clientY-box.top)*$('cropCanvas').height/box.height)}}
-function drawCrop(){const canvas=$('cropCanvas'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(cropSource,0,0);if(cropRect){ctx.fillStyle='#23446666';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(cropSource,cropRect.x,cropRect.y,cropRect.w,cropRect.h,cropRect.x,cropRect.y,cropRect.w,cropRect.h);ctx.strokeStyle='#84b8ff';ctx.lineWidth=3;ctx.strokeRect(cropRect.x,cropRect.y,cropRect.w,cropRect.h)}}
-$('cropCanvas').onpointerdown=event=>{cropStartLocal=cropPoint(event);$('cropCanvas').setPointerCapture(event.pointerId)};
-$('cropCanvas').onpointermove=event=>{if(!cropStartLocal)return;const pos=cropPoint(event);cropRect={x:Math.min(pos.x,cropStartLocal.x),y:Math.min(pos.y,cropStartLocal.y),w:Math.abs(pos.x-cropStartLocal.x),h:Math.abs(pos.y-cropStartLocal.y)};drawCrop()};
-$('cropCanvas').onpointerup=()=>cropStartLocal=null;
-$('cropCancel').onclick=()=>$('cropDialog').close();
-$('cropConfirm').onclick=()=>{const rect=cropRect?.w>10&&cropRect?.h>10?cropRect:{x:0,y:0,w:cropSource.width,h:cropSource.height};const out=document.createElement('canvas');out.width=rect.w;out.height=rect.h;out.getContext('2d').drawImage(cropSource,rect.x,rect.y,rect.w,rect.h,0,0,rect.w,rect.h);$('cropDialog').close();startCapture('',out.toDataURL('image/jpeg',.72),'屏幕截图')};
+}
+$('captureForm').onsubmit=event=>{event.preventDefault();saveCapture(capture,$('captureMemo').value.trim(),true).catch(error=>alert(`保存素材失败：${error.message}`))};
+$('captureScreen').onclick=()=>window.contextyDesktop?window.contextyDesktop.startCapture():alert('请先运行 npm run desktop，再在任意窗口按 Ctrl+Shift+S 框选屏幕区域。');
+window.contextyDesktop?.onCapture(item=>{saveCapture(item,item.memo).catch(error=>alert(`保存截图失败：${error.message}`))});
 $('newChat').onclick=()=>alert('这一轮先完成素材捕捉和画布整理，聊天功能留到下一轮。');
 $('chatForm').onsubmit=event=>{event.preventDefault();alert('这一轮先完成素材画布，聊天功能尚未接入。')};
 $('modeNote').textContent='聊天功能将在画布核对后接入。';

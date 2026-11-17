@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Contexty 截图</title>
+  <link rel="stylesheet" href="capture.css">
+</head>
+<body>
+  <img id="screen" alt="当前屏幕">
+  <div id="shade"></div>
+  <div id="selection" hidden></div>
+  <p id="hint">拖动鼠标框选素材区域，按 Esc 取消</p>
+  <section id="memoPanel" hidden>
+    <h1>记录此刻的想法</h1>
+    <img id="preview" alt="截取的区域">
+    <textarea id="memo" rows="4" placeholder="这段素材让你想到什么？你准备怎样使用它？"></textarea>
+    <p id="error" role="alert"></p>
+    <div class="actions"><button id="retry">重新框选</button><button id="cancel">取消</button><button id="send">发送到画布</button></div>
+  </section>
+  <script src="capture.js"></script>
+</body>
+</html>
