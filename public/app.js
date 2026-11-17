@@ -1,118 +1,98 @@
 import { suggestGroup, inferIntent } from '/core.mjs';
 
 const $ = id => document.getElementById(id);
-const KEY = 'brandnew-contexty-v1';
-const id = () => crypto.randomUUID();
-const demo = {
-  topic: '两天一夜的周末旅行，怎样轻装出行又不遗漏必需品？',
-  groups: [
-    { id: 'g1', name: '开头与痛点', description: '出行时行李过多、忘带东西' },
-    { id: 'g2', name: '打包方法', description: '清单、分类、轻装、收纳方法' },
-    { id: 'g3', name: '产品信息', description: '背包容量、电脑夹层、广告信息' }
+const key = 'brandnew-contexty-canvas-v2';
+const uid = () => crypto.randomUUID();
+const clean = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const seed = {
+  topic:'正在准备一条两天一夜周末旅行的口播脚本，重点是轻装出行与避免遗漏必需品。',
+  groups:[
+    {id:'g1',name:'出发前的烦恼',description:'行李多，怕忘带东西',x:80,y:90,w:440,h:530},
+    {id:'g2',name:'整理与打包方法',description:'清单、分类、收纳',x:550,y:90,w:640,h:530}
   ],
-  cards: [
-    { id: 'c1', text: '出门前把证件、充电设备和换洗衣物分别核对一次。', source: '示例网页', memo: '这里可以作为第二条打包建议，不要写成完整清单。', tags: ['清单', '建议'], groupId: 'g2', status: 'current', intent: '用户考虑把核对必需品作为脚本中的第二条建议', image: null, corrections: 0 },
-    { id: 'c2', text: '一款 20 L 的多隔层背包，设有独立电脑夹层。', source: '示例广告简报', memo: '只保留这两个可核实的产品信息，放在广告段。', tags: ['背包', '产品信息'], groupId: 'g3', status: 'current', intent: '用户希望在广告段准确说明容量与电脑夹层', image: null, corrections: 0 },
-    { id: 'c3', text: '周末旅行也可以围绕城市散步设计系列内容。', source: '示例 AI 对话', memo: '这是下次城市漫游选题，当前打包脚本先不用。', tags: ['未来选题'], groupId: null, status: 'future', intent: '用户希望保留素材，用于未来的城市漫游选题', image: null, corrections: 0 }
-  ]
+  cards:[
+    {id:'c1',title:'反复检查的出发时刻',text:'临出门时反复翻包确认自己有没有带齐必需品。',source:'示例 AI 对话',memo:'这可以作为开头，带出忘东西的焦虑。',tags:['开头','出行痛点'],intent:'用户准备把出门前的焦虑放在脚本开头。',groupId:'g1',status:'current',image:null,x:100,y:145,corrections:0},
+    {id:'c2',title:'轻装打包清单',text:'先列出证件、充电设备与换洗衣物，再按使用频率分层收纳。',source:'示例网页',memo:'把清单缩成三点，作为中间的操作建议。',tags:['清单','打包'],intent:'用户希望把分类清单写成简短的实用建议。',groupId:'g2',status:'current',image:null,x:575,y:145,corrections:0},
+    {id:'c3',title:'背包广告信息',text:'背包容量为 20 L，设有独立电脑夹层。',source:'示例广告简报',memo:'广告段只写这两项可核实的信息。',tags:['产品信息','背包'],intent:'用户希望准确保留容量和电脑夹层两个要点。',groupId:'g2',status:'current',image:null,x:880,y:145,corrections:0}
+  ],
+  notes:[{id:'n1',text:'开头先建立出行场景，再引出三条建议。',x:330,y:160,groupId:'g1'}]
 };
 let state;
-try { state = JSON.parse(localStorage.getItem(KEY)) || structuredClone(demo); } catch { state = structuredClone(demo); }
-let editing = null;
-let pendingImage = null;
-let filter = 'all';
-let cropSource = null;
-let cropRect = null;
-let cropStart = null;
-
-function save() { localStorage.setItem(KEY, JSON.stringify(state)); render(); }
-function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]); }
-function cardHtml(card) {
-  return `<article class="card" draggable="true" data-id="${esc(card.id)}"><div class="card-title">${esc(card.text.slice(0, 55))}${card.text.length > 55 ? '…' : ''}</div><div class="card-source">${esc(card.source || '未记录来源')}</div>${card.image ? `<img class="card-image" src="${card.image}" alt="素材截图">` : ''}<div class="card-text">${esc(card.text)}</div><div class="card-memo"><b>我的想法</b>${esc(card.memo || '尚未填写')}</div><div class="card-intent"><b>系统理解 ${card.corrections ? '· 已人工纠正' : '· 可纠正'}</b>${esc(card.intent)}</div><div class="tags"><span class="status ${esc(card.status)}">${{current:'当前脚本',future:'未来选题',unused:'暂不使用'}[card.status]}</span>${card.tags.map(tag => `<span class="tag">${esc(tag)}</span>`).join('')}</div></article>`;
+try { state = JSON.parse(localStorage.getItem(key)) || structuredClone(seed); if (!Array.isArray(state.notes)) state.notes=[]; } catch { state=structuredClone(seed); }
+let selected=null, tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null, cropSource=null, cropRect=null, cropStart=null;
+const undo=[], redo=[];
+function snapshot(){undo.push(JSON.stringify(state));if(undo.length>30)undo.shift();redo.length=0;}
+function commit(){localStorage.setItem(key,JSON.stringify(state));render();}
+function statusLabel(status){return {current:'当前脚本',future:'未来选题',unused:'暂不使用'}[status]||'当前脚本';}
+function cardHtml(card){return `<div class="context-card ${card.status==='future'?'orange':card.status==='unused'?'cyan':''} ${selected?.id===card.id?'selected':''}" data-kind="card" data-id="${clean(card.id)}" style="left:${card.x}px;top:${card.y}px"><div class="card-head"><span>◈ ${clean(card.title)}</span><div class="card-actions"><button data-edit="${clean(card.id)}" title="编辑">✎</button></div></div><div class="provenance"><b>▣ ${clean(card.source||'未记录来源')}</b><small>${clean(new Date(card.createdAt||Date.now()).toLocaleString('zh-CN'))}</small></div>${card.image?`<img class="card-image" src="${card.image}" alt="捕捉的屏幕区域">`:''}${card.text?`<div class="card-body">${clean(card.text)}</div>`:''}<div class="card-tags">${card.tags.map(tag=>`<span>${clean(tag)}</span>`).join('')}<span>${statusLabel(card.status)}</span></div><div class="card-ai"><b>◇ ${card.interpretMode==='ai'?'AI 理解':'系统初步理解'}</b><p>${clean(card.intent)}</p></div><div class="card-memo">✎ 我的想法：${clean(card.memo||'未填写')}</div></div>`;}
+function groupHtml(group){return `<div class="canvas-group ${selected?.id===group.id?'selected':''}" data-kind="group" data-id="${clean(group.id)}" style="left:${group.x}px;top:${group.y}px;width:${group.w}px;height:${group.h}px"><div class="group-handle"><span>▣ ${clean(group.name)} · ${state.cards.filter(c=>c.groupId===group.id).length} 条</span><button data-group-edit="${clean(group.id)}" title="修改名称">⋯</button></div></div>`;}
+function noteHtml(note){return `<div class="sticky-note ${selected?.id===note.id?'selected':''}" data-kind="note" data-id="${clean(note.id)}" style="left:${note.x}px;top:${note.y}px">${clean(note.text)}</div>`;}
+function render(){
+  $('world').innerHTML=state.groups.map(groupHtml).join('')+state.cards.map(cardHtml).join('')+state.notes.map(noteHtml).join('');
+  $('world').style.transform=`translate(${pan.x}px,${pan.y}px) scale(${scale})`;
+  $('zoomLabel').textContent=`${Math.round(scale*100)}%`;
+  $('overviewCount').textContent=`(${state.cards.length})`;
+  $('topic').value=state.topic;
+  $('groupOutline').innerHTML=state.groups.map(group=>`<div class="cluster-preview" data-jump="${clean(group.id)}">${clean(group.name)}<small>${clean(group.description||'')} · ${state.cards.filter(c=>c.groupId===group.id).length} 条素材</small></div>`).join('');
+  $('outlineItems').innerHTML=state.groups.map(group=>`<div class="outline-group"><b data-jump="${clean(group.id)}">▾ ${clean(group.name)}<span>${state.cards.filter(c=>c.groupId===group.id).length}</span></b>${state.cards.filter(c=>c.groupId===group.id).map(card=>`<div class="outline-card" data-jump="${clean(card.id)}">▣ ${clean(card.title)}</div>`).join('')}</div>`).join('')+state.cards.filter(c=>!c.groupId).map(card=>`<div class="outline-card" data-jump="${clean(card.id)}">▣ ${clean(card.title)}</div>`).join('');
+  document.querySelectorAll('[data-jump]').forEach(el=>el.onclick=()=>focusItem(el.dataset.jump));
+  document.querySelectorAll('[data-edit]').forEach(el=>el.onclick=event=>{event.stopPropagation();openEdit(el.dataset.edit)});
+  document.querySelectorAll('[data-group-edit]').forEach(el=>el.onclick=event=>{event.stopPropagation();const group=state.groups.find(g=>g.id===el.dataset.groupEdit);const name=prompt('分组标题',group.name);if(name?.trim()){snapshot();group.name=name.trim();commit();}});
+  document.querySelectorAll('[data-kind]').forEach(el=>{el.onpointerdown=startDrag;el.ondblclick=()=>{if(el.dataset.kind==='card')openEdit(el.dataset.id);if(el.dataset.kind==='note')editNote(el.dataset.id)};});
 }
-function render() {
-  $('topic').value = state.topic;
-  $('cardCount').textContent = `${state.cards.length} 条素材`;
-  $('groupCount').textContent = `${state.groups.length} 个分组`;
-  const visible = state.cards.filter(card => filter === 'all' || card.status === filter);
-  const columns = [{ id: null, name: '待整理', description: '' }, ...state.groups];
-  $('canvas').innerHTML = columns.map(group => {
-    const cards = visible.filter(card => card.groupId === group.id);
-    return `<section class="group" data-group="${esc(group.id || '')}"><div class="group-head"><div><h3>${esc(group.name)}</h3><small>${cards.length} 条素材</small></div>${group.id ? `<div class="group-actions"><button data-rename="${esc(group.id)}" title="重命名">✎</button></div>` : ''}</div><div class="cards">${cards.length ? cards.map(cardHtml).join('') : '<div class="empty">拖入素材，或添加新卡片</div>'}</div></section>`;
-  }).join('');
-  document.querySelectorAll('.card').forEach(el => {
-    el.addEventListener('click', () => openCard(el.dataset.id));
-    el.addEventListener('dragstart', event => event.dataTransfer.setData('text/plain', el.dataset.id));
-  });
-  document.querySelectorAll('.group').forEach(el => {
-    el.addEventListener('dragover', event => event.preventDefault());
-    el.addEventListener('drop', event => { event.preventDefault(); const card = state.cards.find(item => item.id === event.dataTransfer.getData('text/plain')); if (card) { card.groupId = el.dataset.group || null; card.corrections++; save(); } });
-  });
-  document.querySelectorAll('[data-rename]').forEach(el => el.addEventListener('click', () => { const group = state.groups.find(g => g.id === el.dataset.rename); const name = prompt('分组名称', group.name); if (name?.trim()) { group.name = name.trim(); save(); } }));
-}
-
-function openCard(cardId = null, text = '', source = '', image = null) {
-  editing = cardId;
-  const card = state.cards.find(c => c.id === cardId);
-  pendingImage = image || card?.image || null;
-  $('dialogTitle').textContent = card ? '修改素材与系统理解' : '添加素材';
-  $('cardText').value = card?.text || text;
-  $('cardSource').value = card?.source || source;
-  $('cardMemo').value = card?.memo || '';
-  $('cardTags').value = card?.tags.join('，') || '';
-  $('cardStatus').value = card?.status || 'current';
-  $('cardGroup').innerHTML = '<option value="">待整理</option>' + state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join('');
-  $('cardGroup').value = card?.groupId || '';
-  $('cardIntent').value = card?.intent || '';
-  $('deleteCard').style.visibility = card ? 'visible' : 'hidden';
-  $('imagePreview').innerHTML = pendingImage ? `<img src="${pendingImage}" alt="素材截图">` : '';
-  $('cardDialog').showModal();
-}
-
-$('addCard').onclick = () => openCard();
-$('closeDialog').onclick = () => $('cardDialog').close();
-$('deleteCard').onclick = () => { if (editing && confirm('删除这张素材卡片？')) { state.cards = state.cards.filter(card => card.id !== editing); $('cardDialog').close(); save(); } };
-$('cardMemo').addEventListener('blur', () => { if (!$('cardIntent').value.trim()) $('cardIntent').value = inferIntent($('cardMemo').value); });
-$('cardForm').addEventListener('submit', event => {
-  event.preventDefault();
-  const old = state.cards.find(card => card.id === editing);
-  const memo = $('cardMemo').value.trim();
-  const generatedIntent = inferIntent(memo);
-  const intent = $('cardIntent').value.trim() || generatedIntent;
-  const card = { id: old?.id || id(), text: $('cardText').value.trim(), source: $('cardSource').value.trim(), memo, tags: $('cardTags').value.split(/[,，]/).map(t => t.trim()).filter(Boolean), groupId: $('cardGroup').value || null, status: $('cardStatus').value, intent, image: pendingImage, corrections: (old?.corrections || 0) + (old && (old.intent !== intent || old.groupId !== ($('cardGroup').value || null) || old.tags.join() !== $('cardTags').value.split(/[,，]/).map(t => t.trim()).filter(Boolean).join()) ? 1 : 0) };
-  if (!card.text) return;
-  if (!old && !card.groupId) card.groupId = suggestGroup(card, state.groups);
-  if (old) Object.assign(old, card); else state.cards.push(card);
-  $('cardDialog').close(); save();
-});
-$('addGroup').onclick = () => { const name = prompt('新分组名称'); if (name?.trim()) { state.groups.push({ id: id(), name: name.trim(), description: name.trim() }); save(); } };
-$('topic').addEventListener('change', () => { state.topic = $('topic').value.trim(); save(); });
-document.querySelectorAll('.filter').forEach(el => el.onclick = () => { filter = el.dataset.filter; document.querySelectorAll('.filter').forEach(btn => btn.classList.toggle('active', btn === el)); render(); });
-$('captureText').onclick = async () => { try { const text = await navigator.clipboard.readText(); if (!text.trim()) throw new Error('剪贴板没有文字'); openCard(null, text, '剪贴板选中文字'); } catch (error) { alert(`读取失败：${error.message}。也可以点“添加素材卡片”粘贴。`); } };
-$('captureScreen').onclick = async () => {
-  try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    const video = document.createElement('video'); video.srcObject = stream; await video.play();
-    const canvas = document.createElement('canvas'); canvas.width = Math.min(1200, video.videoWidth); canvas.height = Math.round(video.videoHeight * canvas.width / video.videoWidth);
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    stream.getTracks().forEach(track => track.stop());
-    cropSource = canvas;
-    cropRect = null;
-    const preview = $('cropCanvas'); preview.width = canvas.width; preview.height = canvas.height;
-    drawCrop(); $('cropDialog').showModal();
-  } catch (error) { if (error.name !== 'NotAllowedError') alert(`截图失败：${error.message}`); }
+function focusItem(id){const item=[...state.cards,...state.groups,...state.notes].find(v=>v.id===id);if(!item)return;selected={id,kind:state.cards.includes(item)?'card':state.groups.includes(item)?'group':'note'};pan={x:Math.max(10,$('viewport').clientWidth/2-item.x*scale-140),y:Math.max(10,$('viewport').clientHeight/2-item.y*scale-100)};render();}
+function worldPoint(event){const rect=$('viewport').getBoundingClientRect();return{x:(event.clientX-rect.left-pan.x)/scale,y:(event.clientY-rect.top-pan.y)/scale};}
+function startDrag(event){if(event.target.closest('button'))return;const kind=event.currentTarget.dataset.kind,id=event.currentTarget.dataset.id;const item=({card:state.cards,group:state.groups,note:state.notes})[kind].find(v=>v.id===id);selected={kind,id};const pos=worldPoint(event);drag={kind,id,startX:pos.x,startY:pos.y,x:item.x,y:item.y,moved:false};event.currentTarget.setPointerCapture(event.pointerId);renderSelection();}
+function renderSelection(){document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('selected',el.dataset.id===selected?.id));}
+$('viewport').onpointerdown=event=>{if(event.target.closest('[data-kind]'))return;if(tool==='pan'||event.target===$('viewport')||event.target===$('world')){selected=null;drag={kind:'pan',startClientX:event.clientX,startClientY:event.clientY,x:pan.x,y:pan.y,moved:false};$('viewport').setPointerCapture(event.pointerId);$('viewport').classList.add('panning');renderSelection();}};
+window.addEventListener('pointermove',event=>{if(!drag)return;if(drag.kind==='pan'){pan.x=drag.x+event.clientX-drag.startClientX;pan.y=drag.y+event.clientY-drag.startClientY;$('world').style.transform=`translate(${pan.x}px,${pan.y}px) scale(${scale})`;return;}const pos=worldPoint(event);const dx=pos.x-drag.startX,dy=pos.y-drag.startY;if(Math.abs(dx)+Math.abs(dy)>2)drag.moved=true;const el=document.querySelector(`[data-kind="${drag.kind}"][data-id="${drag.id}"]`);if(el){el.style.left=`${Math.round(drag.x+dx)}px`;el.style.top=`${Math.round(drag.y+dy)}px`;}});
+window.addEventListener('pointerup',event=>{if(!drag)return;if(drag.kind==='pan'){$('viewport').classList.remove('panning');drag=null;return;}if(drag.moved){snapshot();const pos=worldPoint(event),dx=pos.x-drag.startX,dy=pos.y-drag.startY;const item=({card:state.cards,group:state.groups,note:state.notes})[drag.kind].find(v=>v.id===drag.id);item.x=Math.max(0,Math.round(drag.x+dx));item.y=Math.max(0,Math.round(drag.y+dy));if(drag.kind==='group'){for(const card of state.cards.filter(c=>c.groupId===item.id)){card.x+=Math.round(dx);card.y+=Math.round(dy)}for(const note of state.notes.filter(n=>n.groupId===item.id)){note.x+=Math.round(dx);note.y+=Math.round(dy)}}if(drag.kind==='card'||drag.kind==='note'){const cx=item.x+(drag.kind==='card'?140:95),cy=item.y+45;const hit=[...state.groups].reverse().find(g=>cx>=g.x&&cx<=g.x+g.w&&cy>=g.y&&cy<=g.y+g.h);item.groupId=hit?.id||null;if(drag.kind==='card')item.corrections=(item.corrections||0)+1;}commit();}drag=null;});
+function setTool(next){tool=next;$('selectTool').classList.toggle('active',next==='select');$('panTool').classList.toggle('active',next==='pan');}
+$('selectTool').onclick=()=>setTool('select');$('panTool').onclick=()=>setTool('pan');
+function zoomTo(next){scale=Math.min(1.7,Math.max(.35,next));render();}
+$('zoomIn').onclick=()=>zoomTo(scale*1.2);$('zoomOut').onclick=()=>zoomTo(scale/1.2);$('fitView').onclick=()=>{const maxX=Math.max(1100,...state.groups.map(g=>g.x+g.w),...state.cards.map(c=>c.x+300));const maxY=Math.max(650,...state.groups.map(g=>g.y+g.h));scale=Math.min(1,$('viewport').clientWidth/(maxX+50),$('viewport').clientHeight/(maxY+50));pan={x:20,y:20};render()};
+$('viewport').addEventListener('wheel',event=>{if(event.ctrlKey){event.preventDefault();zoomTo(scale*(event.deltaY<0?1.1:.9))}},{passive:false});
+$('addGroup').onclick=()=>{const name=prompt('新分组名称');if(!name?.trim())return;snapshot();state.groups.push({id:uid(),name:name.trim(),description:'',x:150-pan.x/scale,y:130-pan.y/scale,w:440,h:440});commit()};
+$('addNote').onclick=()=>{const text=prompt('写下对素材的想法');if(!text?.trim())return;snapshot();state.notes.push({id:uid(),text:text.trim(),x:200-pan.x/scale,y:180-pan.y/scale,groupId:null});commit()};
+function editNote(id){const note=state.notes.find(n=>n.id===id),text=prompt('修改便签，留空可删除',note.text);if(text===null)return;snapshot();if(text.trim())note.text=text.trim();else state.notes=state.notes.filter(n=>n.id!==id);commit()}
+function openEdit(id){editing=id;const card=state.cards.find(c=>c.id===id);$('editTitle').value=card.title;$('editText').value=card.text;$('editSource').value=card.source;$('editMemo').value=card.memo;$('editTags').value=card.tags.join('，');$('editIntent').value=card.intent;$('editGroup').innerHTML='<option value="">未分组</option>'+state.groups.map(g=>`<option value="${clean(g.id)}">${clean(g.name)}</option>`).join('');$('editGroup').value=card.groupId||'';$('editStatus').value=card.status;$('editDialog').showModal()}
+$('editClose').onclick=()=>$('editDialog').close();
+$('editDelete').onclick=()=>{if(!confirm('删除这张卡片？'))return;snapshot();state.cards=state.cards.filter(c=>c.id!==editing);$('editDialog').close();commit()};
+$('editForm').onsubmit=event=>{event.preventDefault();snapshot();const card=state.cards.find(c=>c.id===editing);card.title=$('editTitle').value.trim();card.text=$('editText').value.trim();card.source=$('editSource').value.trim();card.memo=$('editMemo').value.trim();card.tags=$('editTags').value.split(/[,，]/).map(t=>t.trim()).filter(Boolean);card.intent=$('editIntent').value.trim();card.groupId=$('editGroup').value||null;card.status=$('editStatus').value;card.corrections=(card.corrections||0)+1;$('editDialog').close();commit()};
+$('topic').onchange=()=>{snapshot();state.topic=$('topic').value.trim();commit()};
+$('undoBtn').onclick=()=>{if(!undo.length)return;redo.push(JSON.stringify(state));state=JSON.parse(undo.pop());commit()};
+$('redoBtn').onclick=()=>{if(!redo.length)return;undo.push(JSON.stringify(state));state=JSON.parse(redo.pop());commit()};
+$('exportData').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));a.download='contexty-canvas.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+$('importData').onclick=()=>$('importFile').click();
+$('importFile').onchange=async event=>{try{const data=JSON.parse(await event.target.files[0].text());if(!Array.isArray(data.groups)||!Array.isArray(data.cards))throw Error('格式不正确');snapshot();state={...data,notes:data.notes||[]};commit()}catch(error){alert(error.message)}};
+let cropStartLocal=null;
+function startCapture(text='',image=null,source='手动添加'){capture={text,image,source};$('capturePreview').innerHTML=image?`<img src="${image}" alt="捕捉的屏幕区域">`:clean(text||'空白素材卡片');$('captureMemo').value='';$('captureDialog').showModal()}
+$('captureCancel').onclick=()=>$('captureDialog').close();
+$('addCard').onclick=()=>startCapture();
+$('captureText').onclick=async()=>{try{const text=await navigator.clipboard.readText();if(!text.trim())throw Error('剪贴板里没有文字');startCapture(text,null,'剪贴板选中文字')}catch(error){alert(`读取剪贴板失败：${error.message}。请使用画布底部的“＋”手动添加。`)}};
+$('captureForm').onsubmit=async event=>{
+  event.preventDefault();const memo=$('captureMemo').value.trim();if(!memo)return;
+  snapshot();const tags=[...new Set((state.topic.match(/[\p{Script=Han}]{2,4}/gu)||[]).slice(0,2))];
+  const card={id:uid(),title:(capture.text||memo).slice(0,18),text:capture.text||'',source:capture.source,memo,tags,intent:inferIntent(memo),interpretMode:'rule',groupId:null,status:/以后|未来|下次/.test(memo)?'future':'current',image:capture.image,x:Math.max(30,160-pan.x/scale)+state.cards.length*30,y:Math.max(70,150-pan.y/scale)+state.cards.length*20,createdAt:Date.now(),corrections:0};
+  card.groupId=suggestGroup(card,state.groups);
+  if(card.groupId){const group=state.groups.find(g=>g.id===card.groupId);card.x=group.x+30+(state.cards.filter(c=>c.groupId===group.id).length%2)*295;card.y=group.y+55+Math.floor(state.cards.filter(c=>c.groupId===group.id).length/2)*280}
+  state.cards.push(card);$('captureDialog').close();commit();focusItem(card.id);
+  try{
+    const response=await fetch('/api/interpret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:card.text,memo:card.memo,image:card.image,topic:state.topic,groups:state.groups})});
+    const result=await response.json();if(!response.ok)throw Error(result.error);
+    if(result.mode==='ai'&&state.cards.includes(card)&&card.corrections===0){snapshot();card.title=result.title;card.intent=result.intent;card.tags=result.tags;card.interpretMode='ai';if(result.groupId){card.groupId=result.groupId;const group=state.groups.find(g=>g.id===result.groupId);card.x=group.x+25;card.y=group.y+60+state.cards.filter(c=>c.groupId===group.id&&c.id!==card.id).length*170}commit()}
+  }catch(error){console.warn('素材理解暂时不可用',error)}
 };
-function cropPoint(event) { const bounds = $('cropCanvas').getBoundingClientRect(); return { x: Math.round((event.clientX - bounds.left) * $('cropCanvas').width / bounds.width), y: Math.round((event.clientY - bounds.top) * $('cropCanvas').height / bounds.height) }; }
-function drawCrop() { const canvas = $('cropCanvas'); const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.drawImage(cropSource, 0, 0); if (cropRect) { ctx.fillStyle = '#163b3866'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(cropSource, cropRect.x, cropRect.y, cropRect.w, cropRect.h, cropRect.x, cropRect.y, cropRect.w, cropRect.h); ctx.strokeStyle = '#d8ffea'; ctx.lineWidth = 3; ctx.strokeRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h); } }
-$('cropCanvas').onpointerdown = event => { cropStart = cropPoint(event); $('cropCanvas').setPointerCapture(event.pointerId); };
-$('cropCanvas').onpointermove = event => { if (!cropStart) return; const point = cropPoint(event); cropRect = { x: Math.min(cropStart.x, point.x), y: Math.min(cropStart.y, point.y), w: Math.abs(point.x - cropStart.x), h: Math.abs(point.y - cropStart.y) }; drawCrop(); };
-$('cropCanvas').onpointerup = () => { cropStart = null; };
-$('cancelCrop').onclick = () => $('cropDialog').close();
-$('confirmCrop').onclick = () => { const rect = cropRect?.w > 10 && cropRect?.h > 10 ? cropRect : { x:0, y:0, w:cropSource.width, h:cropSource.height }; const canvas = document.createElement('canvas'); canvas.width = rect.w; canvas.height = rect.h; canvas.getContext('2d').drawImage(cropSource, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h); $('cropDialog').close(); openCard(null, '', '屏幕截图', canvas.toDataURL('image/jpeg', .75)); };
-$('exportData').onclick = () => { const blob = new Blob([JSON.stringify(state, null, 2)], {type:'application/json'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'brandnew-contexty.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
-$('importData').onclick = () => $('importFile').click();
-$('importFile').onchange = async event => { try { const next = JSON.parse(await event.target.files[0].text()); if (!Array.isArray(next.cards) || !Array.isArray(next.groups)) throw new Error('文件格式不正确'); state = next; save(); } catch (error) { alert(error.message); } };
-function message(kind, text, cardIds = []) { const el = document.createElement('div'); el.className = `message ${kind}`; el.textContent = text; if (cardIds.length) { const ref = document.createElement('span'); ref.className = 'refs'; ref.textContent = `使用素材：${cardIds.map(cardId => state.cards.findIndex(c => c.id === cardId) + 1).join('、')}`; el.append(ref); } $('messages').append(el); $('messages').scrollTop = $('messages').scrollHeight; }
-$('chatForm').onsubmit = async event => { event.preventDefault(); const question = $('question').value.trim(); if (!question) return; message('user', question); $('question').value = ''; const btn = event.target.querySelector('button'); btn.disabled = true; try { const res = await fetch('/api/answer', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ question:`当前脚本主题：${state.topic}\n${question}`, cards:state.cards.map(({image, ...card}) => card), groups:state.groups }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error); message('assistant', data.text, data.cardIds); $('modeNote').textContent = data.mode === 'ai' ? '已连接 AI，回答基于当前画布' : '无模型演示模式。配置 OPENAI_API_KEY 可启用 AI 综合回答。'; } catch (error) { message('assistant', `回答失败：${error.message}`); } finally { btn.disabled = false; } };
-$('modeNote').textContent = '无模型时可演示素材筛选与引用。配置 OPENAI_API_KEY 启用 AI。';
+$('captureScreen').onclick=async()=>{try{const stream=await navigator.mediaDevices.getDisplayMedia({video:true});const video=document.createElement('video');video.srcObject=stream;await video.play();cropSource=document.createElement('canvas');cropSource.width=Math.min(1300,video.videoWidth);cropSource.height=Math.round(video.videoHeight*cropSource.width/video.videoWidth);cropSource.getContext('2d').drawImage(video,0,0,cropSource.width,cropSource.height);stream.getTracks().forEach(track=>track.stop());$('cropCanvas').width=cropSource.width;$('cropCanvas').height=cropSource.height;cropRect=null;drawCrop();$('cropDialog').showModal()}catch(error){if(error.name!=='NotAllowedError')alert(error.message)}};
+function cropPoint(event){const box=$('cropCanvas').getBoundingClientRect();return{x:Math.round((event.clientX-box.left)*$('cropCanvas').width/box.width),y:Math.round((event.clientY-box.top)*$('cropCanvas').height/box.height)}}
+function drawCrop(){const canvas=$('cropCanvas'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(cropSource,0,0);if(cropRect){ctx.fillStyle='#23446666';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(cropSource,cropRect.x,cropRect.y,cropRect.w,cropRect.h,cropRect.x,cropRect.y,cropRect.w,cropRect.h);ctx.strokeStyle='#84b8ff';ctx.lineWidth=3;ctx.strokeRect(cropRect.x,cropRect.y,cropRect.w,cropRect.h)}}
+$('cropCanvas').onpointerdown=event=>{cropStartLocal=cropPoint(event);$('cropCanvas').setPointerCapture(event.pointerId)};
+$('cropCanvas').onpointermove=event=>{if(!cropStartLocal)return;const pos=cropPoint(event);cropRect={x:Math.min(pos.x,cropStartLocal.x),y:Math.min(pos.y,cropStartLocal.y),w:Math.abs(pos.x-cropStartLocal.x),h:Math.abs(pos.y-cropStartLocal.y)};drawCrop()};
+$('cropCanvas').onpointerup=()=>cropStartLocal=null;
+$('cropCancel').onclick=()=>$('cropDialog').close();
+$('cropConfirm').onclick=()=>{const rect=cropRect?.w>10&&cropRect?.h>10?cropRect:{x:0,y:0,w:cropSource.width,h:cropSource.height};const out=document.createElement('canvas');out.width=rect.w;out.height=rect.h;out.getContext('2d').drawImage(cropSource,rect.x,rect.y,rect.w,rect.h,0,0,rect.w,rect.h);$('cropDialog').close();startCapture('',out.toDataURL('image/jpeg',.72),'屏幕截图')};
+$('newChat').onclick=()=>alert('这一轮先完成素材捕捉和画布整理，聊天功能留到下一轮。');
+$('chatForm').onsubmit=event=>{event.preventDefault();alert('这一轮先完成素材画布，聊天功能尚未接入。')};
+$('modeNote').textContent='聊天功能将在画布核对后接入。';
+$('tabTimeline').onclick=()=>alert('时间线不在本轮功能范围内。');
 render();

@@ -1,49 +1,12 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Brandnew Contexty · 脚本素材画布</title>
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">C</span><div><strong>Brandnew Contexty</strong><small>脚本素材实验原型</small></div></div>
-      <div class="field-label">当前脚本主题</div>
-      <textarea id="topic" rows="3" placeholder="例如：周末两天一夜，如何轻装出行？"></textarea>
-      <button id="addCard" class="primary full">＋ 添加素材卡片</button>
-      <button id="captureText" class="secondary full">从剪贴板读取文字</button>
-      <button id="captureScreen" class="secondary full">截取屏幕区域</button>
-      <p class="hint">选中文字后复制，再点“从剪贴板读取文字”。屏幕截图会作为图片保存，文字内容需手动补充。</p>
-      <div class="sidebar-divider"></div>
-      <div class="stats"><span id="cardCount">0 条素材</span><span id="groupCount">0 个分组</span></div>
-      <button id="exportData" class="plain full">导出画布 JSON</button>
-      <button id="importData" class="plain full">导入画布 JSON</button>
-      <input id="importFile" type="file" accept="application/json" hidden>
-      <p class="tiny">数据保存在本机浏览器中。原型基于 Contexty 公开论文及演示制作。</p>
-    </aside>
-
-    <main class="workspace">
-      <header class="topbar"><div><div class="eyebrow">CONTEXT CANVAS</div><h1>让素材反映你的想法</h1><p>收集片段，查看系统的理解，调整分组，然后用修正后的画布提问。</p></div><button id="addGroup" class="secondary">＋ 新建分组</button></header>
-      <div class="filters"><button class="filter active" data-filter="all">全部</button><button class="filter" data-filter="current">当前脚本</button><button class="filter" data-filter="future">未来选题</button><button class="filter" data-filter="unused">暂不使用</button></div>
-      <div id="canvas" class="canvas"></div>
-    </main>
-
-    <aside class="chat-panel"><div class="chat-head"><div class="eyebrow">CONTEXT-AWARE CHAT</div><h2>基于画布回答</h2><p>只读取标为“当前脚本”的卡片，使用你修改后的想法和理解。</p></div><div id="messages" class="messages"><div class="welcome">试试问：哪些素材适合放在开头？<br>修改一张卡片后，再问一次，比较回答。</div></div><form id="chatForm" class="chat-form"><textarea id="question" rows="3" placeholder="向素材画布提问…" required></textarea><button class="primary" type="submit">发送</button></form><div id="modeNote" class="mode-note">检查模型连接中…</div></aside>
-  </div>
-
-  <dialog id="cardDialog"><form id="cardForm" method="dialog"><div class="dialog-top"><div><div class="eyebrow">MATERIAL CARD</div><h2 id="dialogTitle">添加素材</h2></div><button type="button" id="closeDialog" class="icon-btn">×</button></div>
-    <label>素材原文 <span>必填</span><textarea id="cardText" rows="5" required placeholder="粘贴你选中的文字片段，截图素材请补充文字描述"></textarea></label>
-    <label>来源<input id="cardSource" placeholder="网页 URL、AI 对话、微信文本等"></label>
-    <label>我当时的想法 <span>关键</span><textarea id="cardMemo" rows="3" placeholder="这条素材为什么重要？你想怎样使用它？"></textarea></label>
-    <label>标签 <small>用逗号分隔</small><input id="cardTags" placeholder="例如：开头，旅行，产品信息"></label>
-    <div class="dialog-grid"><label>归入分组<select id="cardGroup"></select></label><label>用途<select id="cardStatus"><option value="current">用于当前脚本</option><option value="future">留作未来选题</option><option value="unused">暂不使用</option></select></label></div>
-    <label>系统对意图的理解 <small>可以直接纠正</small><textarea id="cardIntent" rows="2"></textarea></label>
-    <div id="imagePreview" class="image-preview"></div>
-    <div class="dialog-actions"><button id="deleteCard" type="button" class="danger">删除卡片</button><button type="submit" class="primary">保存卡片</button></div>
-  </form></dialog>
-  <dialog id="cropDialog"><div class="crop-box"><h2>选择要保存的屏幕区域</h2><p>在图片上拖动框选，确认后再填写素材卡片。</p><canvas id="cropCanvas"></canvas><div class="dialog-actions"><button id="cancelCrop" class="secondary">取消</button><button id="confirmCrop" class="primary">使用选中区域</button></div></div></dialog>
-  <script type="module" src="/app.js"></script>
-</body>
-</html>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brandnew Contexty</title><link rel="stylesheet" href="/style.css"></head><body>
+<div class="shell">
+  <aside class="history"><div class="logo">◈ <b>Contexty</b><small>脚本素材工作区</small></div><button id="newChat" class="history-new">＋ 新对话</button><div class="rail-label">工作区</div><div class="history-item active">当前脚本素材</div><div class="rail-bottom"><button id="exportData">导出画布</button><button id="importData">导入画布</button><input type="file" id="importFile" accept="application/json" hidden></div></aside>
+  <aside class="overview"><div class="tabs"><button id="tabTimeline">时间线</button><button id="tabOverview" class="selected">概览 <span id="overviewCount"></span></button></div><div class="understanding"><div class="section-label">▾ AI CONTEXT UNDERSTANDING</div><textarea id="topic" rows="3" placeholder="当前脚本主题与创作意图"></textarea><div id="groupOutline"></div></div><div class="outline-list"><div class="section-label">素材结构</div><div id="outlineItems"></div></div></aside>
+  <main class="board"><div class="board-top"><span>Context Canvas</span><div><button id="undoBtn" title="撤销">↶</button><button id="redoBtn" title="重做">↷</button><button id="addGroup" title="创建分组">＋ 分组</button></div></div><div id="viewport" class="viewport"><div id="world" class="world"></div></div><div class="board-bottom"><div class="zoom"><button id="zoomOut">−</button><span id="zoomLabel">100%</span><button id="zoomIn">＋</button><button id="fitView">适合屏幕</button></div><div class="tools"><button id="selectTool" class="active" title="选择并移动">↖</button><button id="panTool" title="拖动画布">✋</button><button id="addNote" title="添加便签">▢</button><button id="addCard" title="添加素材">＋</button></div></div></main>
+  <aside class="chat"><div class="chat-title"><b>Chat</b><small>下一轮接入</small></div><div id="messages" class="messages"><div class="welcome">这一轮先核对素材捕捉、卡片、分组和画布的交互。聊天功能暂不开放。</div></div><form id="chatForm"><textarea id="question" rows="3" placeholder="聊天功能下一轮开放" disabled></textarea><button type="submit" disabled>发送 ↗</button></form><p id="modeNote"></p></aside>
+</div>
+<div class="capture-fab"><button id="captureText">⌘ 选中文字</button><button id="captureScreen">▣ 截屏</button></div>
+<dialog id="captureDialog"><form id="captureForm"><h2>记录此刻的想法</h2><div id="capturePreview"></div><textarea id="captureMemo" rows="4" placeholder="这段素材让你想到什么？你准备怎样使用它？" required></textarea><div class="dialog-actions"><button type="button" id="captureCancel">取消</button><button type="submit" class="dark">保存到画布</button></div></form></dialog>
+<dialog id="cropDialog"><div class="crop-wrap"><h2>框选屏幕区域</h2><canvas id="cropCanvas"></canvas><div class="dialog-actions"><button id="cropCancel">取消</button><button id="cropConfirm" class="dark">使用选中区域</button></div></div></dialog>
+<dialog id="editDialog"><form id="editForm"><div class="edit-head"><h2>编辑上下文卡片</h2><button id="editClose" type="button">×</button></div><label>标题<input id="editTitle" required></label><label>素材原文<textarea id="editText" rows="4" placeholder="截图内容可补充文字，供 AI 使用"></textarea></label><label>来源<input id="editSource" placeholder="来源应用或网址"></label><label>我当时的想法<textarea id="editMemo" rows="3"></textarea></label><label>标签<input id="editTags" placeholder="用逗号分隔"></label><label>AI 对意图的理解<textarea id="editIntent" rows="3"></textarea></label><div class="edit-row"><label>所属分组<select id="editGroup"></select></label><label>使用状态<select id="editStatus"><option value="current">用于当前脚本</option><option value="future">留作未来选题</option><option value="unused">暂不使用</option></select></label></div><div class="dialog-actions"><button id="editDelete" type="button" class="danger">删除</button><button type="submit" class="dark">保存修改</button></div></form></dialog>
+<script type="module" src="/app.js"></script></body></html>
