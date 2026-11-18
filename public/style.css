@@ -14,3 +14,14 @@
 .note-links marker path{fill:#344052}
 .sticky-note.linked-note{width:210px;min-height:145px;background:#f8c986;padding:15px;font-size:15px;line-height:1.4;overflow-wrap:anywhere}
 .linked-note small{display:block;font-size:10px;letter-spacing:.04em;color:#75522c;margin-bottom:9px}
+.card-actions{flex:none}
+.card-actions button{border-radius:4px;padding:3px 4px;font-size:10px;white-space:nowrap}
+.card-actions [data-hide-card]:hover{background:#e6eefc;color:#3769aa}
+.card-actions [data-delete-card]:hover{background:#fff0ef;color:#a7443a}
+.group-handle [data-dissolve-group]{font-size:11px;font-weight:700;padding:4px 6px;border-radius:4px;white-space:nowrap}
+.group-handle [data-dissolve-group]:hover{background:#dceafb;color:#285f9e}
+.outline-card{display:flex;align-items:center;gap:5px}
+.outline-card>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.outline-card.is-hidden{color:#97a2b1;background:#f0f3f7}
+.outline-card button{margin-left:auto;border:0;border-radius:4px;padding:2px 5px;background:#e2ecfa;color:#3565a5;font-size:10px;white-space:nowrap}
+.outline-card button:hover{background:#cfe0f6}

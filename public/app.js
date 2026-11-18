@@ -43,6 +43,38 @@ let selected=null, tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing
 const undo=[], redo=[];
 function snapshot(){undo.push(JSON.stringify(state));if(undo.length>30)undo.shift();redo.length=0;}
 function commit(){localStorage.setItem(key,JSON.stringify(state));render();}
+function deleteCard(id){
+  const card=state.cards.find(item=>item.id===id);
+  if(!card||!confirm(`删除“${card.title}”及其关联便签？`))return;
+  snapshot();
+  state.cards=state.cards.filter(item=>item.id!==id);
+  state.notes=state.notes.filter(note=>note.cardId!==id);
+  if(selected?.id===id)selected=null;
+  if($('editDialog').open&&editing===id)$('editDialog').close();
+  commit();
+}
+function hideCard(id){
+  const card=state.cards.find(item=>item.id===id);
+  if(!card||card.hidden)return;
+  snapshot();card.hidden=true;
+  if(selected?.id===id)selected=null;
+  commit();
+}
+function showCard(id){
+  const card=state.cards.find(item=>item.id===id);
+  if(!card)return;
+  if(card.hidden){snapshot();card.hidden=false;commit();}
+  focusItem(id);
+}
+function dissolveGroup(id){
+  if(!state.groups.some(group=>group.id===id))return;
+  snapshot();
+  state.groups=state.groups.filter(group=>group.id!==id);
+  for(const card of state.cards)if(card.groupId===id)card.groupId=null;
+  for(const note of state.notes)if(note.groupId===id)note.groupId=null;
+  if(selected?.id===id)selected=null;
+  commit();
+}
 function statusLabel(status){return {current:'当前脚本',future:'未来选题',unused:'暂不使用'}[status]||'当前脚本';}
 function sourceLink(url){
   try{const parsed=new URL(url);return ['http:','https:'].includes(parsed.protocol)?parsed.href:''}
@@ -53,7 +85,7 @@ function cardHtml(card){
   const provenance=card.sourceUrl?(url?`<a href="${clean(url)}" target="_blank" rel="noopener noreferrer" title="${clean(card.sourceUrl)}">${clean(card.sourceUrl)}</a>`:`<small title="${clean(card.sourceUrl)}">${clean(card.sourceUrl)}</small>`):'';
   const tags=(card.tags||[]).map((tag,index)=>`<span class="tag-chip">${clean(tag)}<button type="button" data-remove-tag="${clean(card.id)}" data-tag-index="${index}" title="移除标签">×</button></span>`).join('');
   return `<div class="context-card ${card.status==='future'?'orange':card.status==='unused'?'cyan':''} ${selected?.id===card.id?'selected':''}" data-kind="card" data-id="${clean(card.id)}" style="left:${card.x}px;top:${card.y}px">
-    <div class="card-head"><span>◈</span><input class="card-title-input" data-title-input="${clean(card.id)}" value="${clean(card.title)}" aria-label="卡片标题" title="点击修改标题"><div class="card-actions"><button data-edit="${clean(card.id)}" title="编辑卡片">✎</button></div></div>
+    <div class="card-head"><span>◈</span><input class="card-title-input" data-title-input="${clean(card.id)}" value="${clean(card.title)}" aria-label="卡片标题" title="点击修改标题"><div class="card-actions"><button type="button" data-hide-card="${clean(card.id)}" title="隐藏卡片，可从左侧素材结构恢复">隐藏</button><button type="button" data-delete-card="${clean(card.id)}" title="删除卡片及关联便签">删除</button></div></div>
     <div class="provenance"><b>▣ ${clean(card.source||'来源未记录')}</b>${provenance}<small>${clean(new Date(card.createdAt||Date.now()).toLocaleString('zh-CN'))}</small></div>
     ${card.image?`<img class="card-image" src="${card.image}" alt="捕捉的屏幕区域">`:''}
     ${card.text?`<div class="card-body">${clean(card.text)}</div>`:''}
@@ -62,11 +94,11 @@ function cardHtml(card){
     ${!card.image?`<div class="card-memo">✎ 我的想法：${clean(card.memo||'未填写')}</div>`:''}
   </div>`;
 }
-function groupHtml(group){return `<div class="canvas-group ${selected?.id===group.id?'selected':''}" data-kind="group" data-id="${clean(group.id)}" style="left:${group.x}px;top:${group.y}px;width:${group.w}px;height:${group.h}px"><div class="group-handle"><span>▣ ${clean(group.name)} · ${state.cards.filter(c=>c.groupId===group.id).length} 条</span><button data-group-edit="${clean(group.id)}" title="修改名称">⋯</button></div></div>`;}
+function groupHtml(group){return `<div class="canvas-group ${selected?.id===group.id?'selected':''}" data-kind="group" data-id="${clean(group.id)}" style="left:${group.x}px;top:${group.y}px;width:${group.w}px;height:${group.h}px"><div class="group-handle"><span>▣ ${clean(group.name)} · ${state.cards.filter(c=>c.groupId===group.id).length} 条</span><button type="button" data-dissolve-group="${clean(group.id)}" title="解除分组，保留全部素材和便签">解除分组</button></div></div>`;}
 function noteHtml(note){return `<div class="sticky-note ${note.cardId?'linked-note':''} ${selected?.id===note.id?'selected':''}" data-kind="note" data-id="${clean(note.id)}" style="left:${note.x}px;top:${note.y}px" title="双击修改想法">${note.cardId?'<small>我的想法</small>':''}<div>${clean(note.text)}</div></div>`;}
 function noteLinksHtml(){
   const paths=state.notes.filter(note=>note.cardId).map(note=>{
-    const card=state.cards.find(item=>item.id===note.cardId);
+    const card=state.cards.find(item=>item.id===note.cardId&&!item.hidden);
     if(!card)return '';
     const fromX=Number(note.x)||0,fromY=(Number(note.y)||0)+55,toX=(Number(card.x)||0)+280,toY=(Number(card.y)||0)+95;
     return `<path d="M ${fromX} ${fromY} C ${fromX-35} ${fromY}, ${toX+35} ${toY}, ${toX} ${toY}" marker-end="url(#note-arrow)"/>`;
@@ -74,16 +106,19 @@ function noteLinksHtml(){
   return `<svg class="note-links" viewBox="0 0 2400 1800" aria-hidden="true"><defs><marker id="note-arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z"/></marker></defs>${paths}</svg>`;
 }
 function render(){
-  $('world').innerHTML=state.groups.map(groupHtml).join('')+noteLinksHtml()+state.cards.map(cardHtml).join('')+state.notes.map(noteHtml).join('');
+  $('world').innerHTML=state.groups.map(groupHtml).join('')+noteLinksHtml()+state.cards.filter(card=>!card.hidden).map(cardHtml).join('')+state.notes.filter(note=>!note.cardId||state.cards.some(card=>card.id===note.cardId&&!card.hidden)).map(noteHtml).join('');
   $('world').style.transform=`translate(${pan.x}px,${pan.y}px) scale(${scale})`;
   $('zoomLabel').textContent=`${Math.round(scale*100)}%`;
   $('overviewCount').textContent=`(${state.cards.length})`;
   $('topic').value=state.topic;
   $('groupOutline').innerHTML=state.groups.map(group=>`<div class="cluster-preview" data-jump="${clean(group.id)}">${clean(group.name)}<small>${clean(group.description||'')} · ${state.cards.filter(c=>c.groupId===group.id).length} 条素材</small></div>`).join('');
-  $('outlineItems').innerHTML=state.groups.map(group=>`<div class="outline-group"><b data-jump="${clean(group.id)}">▾ ${clean(group.name)}<span>${state.cards.filter(c=>c.groupId===group.id).length}</span></b>${state.cards.filter(c=>c.groupId===group.id).map(card=>`<div class="outline-card" data-jump="${clean(card.id)}">▣ ${clean(card.title)}</div>`).join('')}</div>`).join('')+state.cards.filter(c=>!c.groupId).map(card=>`<div class="outline-card" data-jump="${clean(card.id)}">▣ ${clean(card.title)}</div>`).join('');
+  const outlineCard=card=>`<div class="outline-card ${card.hidden?'is-hidden':''}" data-jump="${clean(card.id)}"><span>▣ ${clean(card.title)}</span>${card.hidden?`<button type="button" data-show-card="${clean(card.id)}" title="恢复到画布">显示</button>`:''}</div>`;
+  $('outlineItems').innerHTML=state.groups.map(group=>`<div class="outline-group"><b data-jump="${clean(group.id)}">▾ ${clean(group.name)}<span>${state.cards.filter(c=>c.groupId===group.id).length}</span></b>${state.cards.filter(c=>c.groupId===group.id).map(outlineCard).join('')}</div>`).join('')+state.cards.filter(c=>!c.groupId).map(outlineCard).join('');
   document.querySelectorAll('[data-jump]').forEach(el=>el.onclick=()=>focusItem(el.dataset.jump));
-  document.querySelectorAll('[data-edit]').forEach(el=>el.onclick=event=>{event.stopPropagation();openEdit(el.dataset.edit)});
-  document.querySelectorAll('[data-group-edit]').forEach(el=>el.onclick=event=>{event.stopPropagation();const group=state.groups.find(g=>g.id===el.dataset.groupEdit);const name=prompt('分组标题',group.name);if(name?.trim()){snapshot();group.name=name.trim();commit();}});
+  document.querySelectorAll('[data-show-card]').forEach(el=>el.onclick=event=>{event.stopPropagation();showCard(el.dataset.showCard);});
+  document.querySelectorAll('[data-hide-card]').forEach(el=>el.onclick=event=>{event.stopPropagation();hideCard(el.dataset.hideCard);});
+  document.querySelectorAll('[data-delete-card]').forEach(el=>el.onclick=event=>{event.stopPropagation();deleteCard(el.dataset.deleteCard);});
+  document.querySelectorAll('[data-dissolve-group]').forEach(el=>el.onclick=event=>{event.stopPropagation();dissolveGroup(el.dataset.dissolveGroup);});
   document.querySelectorAll('[data-title-input]').forEach(el=>{
     el.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();el.blur();}};
     el.onchange=()=>{const card=state.cards.find(item=>item.id===el.dataset.titleInput);const title=el.value.trim();if(!title){el.value=card.title;return;}if(title!==card.title){snapshot();card.title=title;card.corrections=(card.corrections||0)+1;commit();}};
@@ -96,7 +131,7 @@ function render(){
   });
   document.querySelectorAll('[data-kind]').forEach(el=>{el.onpointerdown=startDrag;el.ondblclick=event=>{if(event.target.closest('button,input,textarea,a'))return;if(el.dataset.kind==='card')openEdit(el.dataset.id);if(el.dataset.kind==='note')editNote(el.dataset.id)};});
 }
-function focusItem(id){const item=[...state.cards,...state.groups,...state.notes].find(v=>v.id===id);if(!item)return;selected={id,kind:state.cards.includes(item)?'card':state.groups.includes(item)?'group':'note'};pan={x:Math.max(10,$('viewport').clientWidth/2-item.x*scale-140),y:Math.max(10,$('viewport').clientHeight/2-item.y*scale-100)};render();}
+function focusItem(id){const item=[...state.cards,...state.groups,...state.notes].find(v=>v.id===id);if(!item)return;if(state.cards.includes(item)&&item.hidden){showCard(id);return;}selected={id,kind:state.cards.includes(item)?'card':state.groups.includes(item)?'group':'note'};pan={x:Math.max(10,$('viewport').clientWidth/2-item.x*scale-140),y:Math.max(10,$('viewport').clientHeight/2-item.y*scale-100)};render();}
 function worldPoint(event){const rect=$('viewport').getBoundingClientRect();return{x:(event.clientX-rect.left-pan.x)/scale,y:(event.clientY-rect.top-pan.y)/scale};}
 function startDrag(event){if(event.target.closest('button,input,textarea,a'))return;const kind=event.currentTarget.dataset.kind,id=event.currentTarget.dataset.id;const item=({card:state.cards,group:state.groups,note:state.notes})[kind].find(v=>v.id===id);selected={kind,id};const pos=worldPoint(event);drag={kind,id,startX:pos.x,startY:pos.y,x:item.x,y:item.y,moved:false};event.currentTarget.setPointerCapture(event.pointerId);renderSelection();}
 function renderSelection(){document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('selected',el.dataset.id===selected?.id));}
@@ -133,14 +168,14 @@ window.addEventListener('pointerup',event=>{
 function setTool(next){tool=next;$('selectTool').classList.toggle('active',next==='select');$('panTool').classList.toggle('active',next==='pan');}
 $('selectTool').onclick=()=>setTool('select');$('panTool').onclick=()=>setTool('pan');
 function zoomTo(next){scale=Math.min(1.7,Math.max(.35,next));render();}
-$('zoomIn').onclick=()=>zoomTo(scale*1.2);$('zoomOut').onclick=()=>zoomTo(scale/1.2);$('fitView').onclick=()=>{const maxX=Math.max(1100,...state.groups.map(g=>g.x+g.w),...state.cards.map(c=>c.x+300),...state.notes.map(n=>n.x+220));const maxY=Math.max(650,...state.groups.map(g=>g.y+g.h),...state.notes.map(n=>n.y+180));scale=Math.min(1,$('viewport').clientWidth/(maxX+50),$('viewport').clientHeight/(maxY+50));pan={x:20,y:20};render()};
+$('zoomIn').onclick=()=>zoomTo(scale*1.2);$('zoomOut').onclick=()=>zoomTo(scale/1.2);$('fitView').onclick=()=>{const visibleCards=state.cards.filter(card=>!card.hidden),visibleNotes=state.notes.filter(note=>!note.cardId||visibleCards.some(card=>card.id===note.cardId));const maxX=Math.max(1100,...state.groups.map(g=>g.x+g.w),...visibleCards.map(c=>c.x+300),...visibleNotes.map(n=>n.x+220));const maxY=Math.max(650,...state.groups.map(g=>g.y+g.h),...visibleNotes.map(n=>n.y+180));scale=Math.min(1,$('viewport').clientWidth/(maxX+50),$('viewport').clientHeight/(maxY+50));pan={x:20,y:20};render()};
 $('viewport').addEventListener('wheel',event=>{if(event.ctrlKey){event.preventDefault();zoomTo(scale*(event.deltaY<0?1.1:.9))}},{passive:false});
 $('addGroup').onclick=()=>{const name=prompt('新分组名称');if(!name?.trim())return;snapshot();state.groups.push({id:uid(),name:name.trim(),description:'',x:150-pan.x/scale,y:130-pan.y/scale,w:440,h:440});commit()};
 $('addNote').onclick=()=>{const text=prompt('写下对素材的想法');if(!text?.trim())return;snapshot();state.notes.push({id:uid(),text:text.trim(),x:200-pan.x/scale,y:180-pan.y/scale,groupId:null});commit()};
 function editNote(id){const note=state.notes.find(n=>n.id===id),text=prompt('修改便签，留空可删除',note.text);if(text===null)return;snapshot();const card=state.cards.find(c=>c.id===note.cardId);if(text.trim())note.text=text.trim();else state.notes=state.notes.filter(n=>n.id!==id);if(card){card.memo=text.trim();card.corrections=(card.corrections||0)+1;}commit()}
 function openEdit(id){editing=id;const card=state.cards.find(c=>c.id===id);$('editTitle').value=card.title;$('editText').value=card.text;$('editSource').value=card.source;$('editSourceUrl').value=card.sourceUrl||'';$('editMemo').value=card.memo;$('editTags').value=card.tags.join('，');$('editIntent').value=card.intent;$('editGroup').innerHTML='<option value="">未分组</option>'+state.groups.map(g=>`<option value="${clean(g.id)}">${clean(g.name)}</option>`).join('');$('editGroup').value=card.groupId||'';$('editStatus').value=card.status;$('editDialog').showModal()}
 $('editClose').onclick=()=>$('editDialog').close();
-$('editDelete').onclick=()=>{if(!confirm('删除这张卡片？'))return;snapshot();state.cards=state.cards.filter(c=>c.id!==editing);state.notes=state.notes.filter(n=>n.cardId!==editing);$('editDialog').close();commit()};
+$('editDelete').onclick=()=>deleteCard(editing);
 $('editForm').onsubmit=event=>{event.preventDefault();snapshot();const card=state.cards.find(c=>c.id===editing);card.title=$('editTitle').value.trim();card.text=$('editText').value.trim();card.source=$('editSource').value.trim();card.sourceUrl=$('editSourceUrl').value.trim();card.memo=$('editMemo').value.trim();card.tags=$('editTags').value.split(/[,，]/).map(t=>t.trim()).filter(Boolean);card.intent=$('editIntent').value.trim();card.groupId=$('editGroup').value||null;card.status=$('editStatus').value;card.corrections=(card.corrections||0)+1;syncMemoNote(card);$('editDialog').close();commit()};
 $('topic').onchange=()=>{snapshot();state.topic=$('topic').value.trim();commit()};
 $('undoBtn').onclick=()=>{if(!undo.length)return;redo.push(JSON.stringify(state));state=JSON.parse(undo.pop());commit()};
