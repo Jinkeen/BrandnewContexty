@@ -39,10 +39,31 @@ function migrateScreenshotCards(){
 }
 const migrated=migrateScreenshotCards();
 if(migrated)localStorage.setItem(key,JSON.stringify(state));
-let selected=null, tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null;
+let selected=null, selectedCards=new Set(), tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null, textDialogAction=null;
 const undo=[], redo=[];
 function snapshot(){undo.push(JSON.stringify(state));if(undo.length>30)undo.shift();redo.length=0;}
-function commit(){localStorage.setItem(key,JSON.stringify(state));render();}
+function commit(){selectedCards=new Set([...selectedCards].filter(id=>state.cards.some(card=>card.id===id&&!card.hidden)));localStorage.setItem(key,JSON.stringify(state));render();}
+function openTextDialog({title,value='',multiline=false,allowEmpty=false,onSave}){
+  const field=$(multiline?'textDialogTextarea':'textDialogInput');
+  $('textDialogTitle').textContent=title;
+  $('textDialogInput').hidden=multiline;
+  $('textDialogTextarea').hidden=!multiline;
+  field.value=value;field.required=!allowEmpty;
+  textDialogAction=onSave;
+  $('textDialog').showModal();field.focus();
+  if(!multiline)field.select();
+}
+$('textForm').onsubmit=event=>{
+  event.preventDefault();
+  const field=$('textDialogTextarea').hidden?$('textDialogInput'):$('textDialogTextarea');
+  const value=field.value.trim();
+  if(field.required&&!value)return;
+  const action=textDialogAction;
+  $('textDialog').close();textDialogAction=null;
+  action?.(value);
+};
+$('textDialogCancel').onclick=()=>{textDialogAction=null;$('textDialog').close();};
+$('textDialog').addEventListener('cancel',()=>{textDialogAction=null;});
 function deleteCard(id){
   const card=state.cards.find(item=>item.id===id);
   if(!card||!confirm(`删除“${card.title}”及其关联便签？`))return;
@@ -75,6 +96,64 @@ function dissolveGroup(id){
   if(selected?.id===id)selected=null;
   commit();
 }
+function selectedCardItems(){return state.cards.filter(card=>selectedCards.has(card.id)&&!card.hidden);}
+function hideSelectionMenu(){$('selectionMenu').hidden=true;}
+function hideSelectedCards(){
+  const cards=selectedCardItems();if(!cards.length)return;
+  snapshot();for(const card of cards)card.hidden=true;
+  selectedCards.clear();selected=null;hideSelectionMenu();commit();
+}
+function deleteSelectedCards(){
+  const cards=selectedCardItems();if(!cards.length)return;
+  if(!confirm(`删除所选的 ${cards.length} 张卡片及其关联便签？`))return;
+  snapshot();const ids=new Set(cards.map(card=>card.id));
+  state.cards=state.cards.filter(card=>!ids.has(card.id));
+  state.notes=state.notes.filter(note=>!ids.has(note.cardId));
+  selectedCards.clear();selected=null;hideSelectionMenu();commit();
+}
+function cardDimensions(card){
+  const el=[...document.querySelectorAll('[data-kind="card"]')].find(item=>item.dataset.id===card.id);
+  return {width:el?.offsetWidth||280,height:el?.offsetHeight||280};
+}
+function createGroupFromSelection(name){
+  const cards=selectedCardItems();if(!cards.length)return;
+  let minX=Infinity,minY=Infinity,maxX=0,maxY=0;
+  for(const card of cards){
+    const size=cardDimensions(card);
+    minX=Math.min(minX,card.x);minY=Math.min(minY,card.y);
+    maxX=Math.max(maxX,card.x+size.width);maxY=Math.max(maxY,card.y+size.height);
+    const note=state.notes.find(item=>item.cardId===card.id);
+    if(note){minX=Math.min(minX,note.x);minY=Math.min(minY,note.y);maxX=Math.max(maxX,note.x+210);maxY=Math.max(maxY,note.y+145);}
+  }
+  const x=Math.max(0,minX-25),y=Math.max(0,minY-52);
+  snapshot();
+  const group={id:uid(),name:name.trim(),description:'',x,y,w:Math.max(370,maxX-x+25),h:Math.max(250,maxY-y+30)};
+  state.groups.push(group);
+  for(const card of cards){card.groupId=group.id;card.corrections=(card.corrections||0)+1;const note=state.notes.find(item=>item.cardId===card.id);if(note)note.groupId=group.id;}
+  selectedCards.clear();selected={kind:'group',id:group.id};commit();
+}
+function addSelectionToGroup(id){
+  const group=state.groups.find(item=>item.id===id),cards=selectedCardItems();
+  if(!group||!cards.length)return;
+  hideSelectionMenu();snapshot();
+  const existing=state.cards.filter(card=>card.groupId===id&&!selectedCards.has(card.id)&&!card.hidden);
+  let nextY=Math.max(group.y+55,...existing.map(card=>card.y+cardDimensions(card).height+25));
+  for(const card of cards){
+    const size=cardDimensions(card),note=state.notes.find(item=>item.cardId===card.id);
+    const noteOffset=note?{x:note.x-card.x,y:note.y-card.y}:null;
+    card.x=group.x+25;card.y=nextY;card.groupId=id;card.corrections=(card.corrections||0)+1;
+    if(note){note.x=card.x+noteOffset.x;note.y=card.y+noteOffset.y;note.groupId=id;group.w=Math.max(group.w,note.x+210-group.x+25);}
+    group.w=Math.max(group.w,card.x+size.width-group.x+25);
+    nextY+=Math.max(size.height,note?noteOffset.y+145:0)+28;
+  }
+  group.h=Math.max(group.h,nextY-group.y+15);
+  selectedCards.clear();selected={kind:'group',id};commit();focusItem(id);
+}
+function removeSelectionFromGroups(){
+  const cards=selectedCardItems();if(!cards.length)return;
+  snapshot();for(const card of cards){card.groupId=null;card.corrections=(card.corrections||0)+1;const note=state.notes.find(item=>item.cardId===card.id);if(note)note.groupId=null;}
+  hideSelectionMenu();commit();
+}
 function statusLabel(status){return {current:'当前脚本',future:'未来选题',unused:'暂不使用'}[status]||'当前脚本';}
 function sourceLink(url){
   try{const parsed=new URL(url);return ['http:','https:'].includes(parsed.protocol)?parsed.href:''}
@@ -84,7 +163,7 @@ function cardHtml(card){
   const url=sourceLink(card.sourceUrl);
   const provenance=card.sourceUrl?(url?`<a href="${clean(url)}" target="_blank" rel="noopener noreferrer" title="${clean(card.sourceUrl)}">${clean(card.sourceUrl)}</a>`:`<small title="${clean(card.sourceUrl)}">${clean(card.sourceUrl)}</small>`):'';
   const tags=(card.tags||[]).map((tag,index)=>`<span class="tag-chip">${clean(tag)}<button type="button" data-remove-tag="${clean(card.id)}" data-tag-index="${index}" title="移除标签">×</button></span>`).join('');
-  return `<div class="context-card ${card.status==='future'?'orange':card.status==='unused'?'cyan':''} ${selected?.id===card.id?'selected':''}" data-kind="card" data-id="${clean(card.id)}" style="left:${card.x}px;top:${card.y}px">
+  return `<div class="context-card ${card.status==='future'?'orange':card.status==='unused'?'cyan':''} ${selectedCards.has(card.id)?'selected':''}" data-kind="card" data-id="${clean(card.id)}" style="left:${card.x}px;top:${card.y}px">
     <div class="card-head"><span>◈</span><input class="card-title-input" data-title-input="${clean(card.id)}" value="${clean(card.title)}" aria-label="卡片标题" title="点击修改标题"><div class="card-actions"><button type="button" data-hide-card="${clean(card.id)}" title="隐藏卡片，可从左侧素材结构恢复">隐藏</button><button type="button" data-delete-card="${clean(card.id)}" title="删除卡片及关联便签">删除</button></div></div>
     <div class="provenance"><b>▣ ${clean(card.source||'来源未记录')}</b>${provenance}<small>${clean(new Date(card.createdAt||Date.now()).toLocaleString('zh-CN'))}</small></div>
     ${card.image?`<img class="card-image" src="${card.image}" alt="捕捉的屏幕区域">`:''}
@@ -131,14 +210,61 @@ function render(){
   });
   document.querySelectorAll('[data-kind]').forEach(el=>{el.onpointerdown=startDrag;el.ondblclick=event=>{if(event.target.closest('button,input,textarea,a'))return;if(el.dataset.kind==='card')openEdit(el.dataset.id);if(el.dataset.kind==='note')editNote(el.dataset.id)};});
 }
-function focusItem(id){const item=[...state.cards,...state.groups,...state.notes].find(v=>v.id===id);if(!item)return;if(state.cards.includes(item)&&item.hidden){showCard(id);return;}selected={id,kind:state.cards.includes(item)?'card':state.groups.includes(item)?'group':'note'};pan={x:Math.max(10,$('viewport').clientWidth/2-item.x*scale-140),y:Math.max(10,$('viewport').clientHeight/2-item.y*scale-100)};render();}
+function focusItem(id){const item=[...state.cards,...state.groups,...state.notes].find(v=>v.id===id);if(!item)return;if(state.cards.includes(item)&&item.hidden){showCard(id);return;}selected={id,kind:state.cards.includes(item)?'card':state.groups.includes(item)?'group':'note'};selectedCards=state.cards.includes(item)?new Set([id]):new Set();pan={x:Math.max(10,$('viewport').clientWidth/2-item.x*scale-140),y:Math.max(10,$('viewport').clientHeight/2-item.y*scale-100)};render();}
 function worldPoint(event){const rect=$('viewport').getBoundingClientRect();return{x:(event.clientX-rect.left-pan.x)/scale,y:(event.clientY-rect.top-pan.y)/scale};}
-function startDrag(event){if(event.target.closest('button,input,textarea,a'))return;const kind=event.currentTarget.dataset.kind,id=event.currentTarget.dataset.id;const item=({card:state.cards,group:state.groups,note:state.notes})[kind].find(v=>v.id===id);selected={kind,id};const pos=worldPoint(event);drag={kind,id,startX:pos.x,startY:pos.y,x:item.x,y:item.y,moved:false};event.currentTarget.setPointerCapture(event.pointerId);renderSelection();}
-function renderSelection(){document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('selected',el.dataset.id===selected?.id));}
-$('viewport').onpointerdown=event=>{if(event.target.closest('[data-kind]'))return;if(tool==='pan'||event.target===$('viewport')||event.target===$('world')){selected=null;drag={kind:'pan',startClientX:event.clientX,startClientY:event.clientY,x:pan.x,y:pan.y,moved:false};$('viewport').setPointerCapture(event.pointerId);$('viewport').classList.add('panning');renderSelection();}};
-window.addEventListener('pointermove',event=>{if(!drag)return;if(drag.kind==='pan'){pan.x=drag.x+event.clientX-drag.startClientX;pan.y=drag.y+event.clientY-drag.startClientY;$('world').style.transform=`translate(${pan.x}px,${pan.y}px) scale(${scale})`;return;}const pos=worldPoint(event);const dx=pos.x-drag.startX,dy=pos.y-drag.startY;if(Math.abs(dx)+Math.abs(dy)>2)drag.moved=true;const el=document.querySelector(`[data-kind="${drag.kind}"][data-id="${drag.id}"]`);if(el){el.style.left=`${Math.round(drag.x+dx)}px`;el.style.top=`${Math.round(drag.y+dy)}px`;}});
+function startDrag(event){
+  if(event.button!==0||event.target.closest('button,input,textarea,a'))return;
+  const kind=event.currentTarget.dataset.kind,id=event.currentTarget.dataset.id;
+  if(kind==='group'&&!event.target.closest('.group-handle'))return;
+  if(kind==='card'&&(event.shiftKey||event.ctrlKey)){
+    if(selectedCards.has(id))selectedCards.delete(id);else selectedCards.add(id);
+    selected=null;hideSelectionMenu();renderSelection();return;
+  }
+  if(kind==='card'){if(!selectedCards.has(id))selectedCards=new Set([id]);}
+  else selectedCards.clear();
+  hideSelectionMenu();
+  const item=({card:state.cards,group:state.groups,note:state.notes})[kind].find(v=>v.id===id);
+  selected={kind,id};const pos=worldPoint(event);
+  drag={kind,id,startX:pos.x,startY:pos.y,x:item.x,y:item.y,moved:false};
+  event.currentTarget.setPointerCapture(event.pointerId);renderSelection();
+}
+function renderSelection(){document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('selected',el.dataset.kind==='card'?selectedCards.has(el.dataset.id):el.dataset.id===selected?.id));}
+$('viewport').onpointerdown=event=>{
+  if(event.button!==0)return;
+  const targetItem=event.target.closest('[data-kind]');
+  if(targetItem&&(targetItem.dataset.kind!=='group'||event.target.closest('.group-handle')))return;
+  hideSelectionMenu();
+  if(tool==='pan'){
+    selected=null;selectedCards.clear();
+    drag={kind:'pan',startClientX:event.clientX,startClientY:event.clientY,x:pan.x,y:pan.y,moved:false};
+    $('viewport').classList.add('panning');
+  }else{
+    selected=null;
+    drag={kind:'marquee',startClientX:event.clientX,startClientY:event.clientY,baseIds:event.shiftKey?new Set(selectedCards):new Set(),moved:false};
+    if(!event.shiftKey)selectedCards.clear();
+  }
+  $('viewport').setPointerCapture(event.pointerId);renderSelection();
+};
+function updateMarquee(event){
+  const dx=event.clientX-drag.startClientX,dy=event.clientY-drag.startClientY;
+  if(Math.abs(dx)+Math.abs(dy)>4)drag.moved=true;
+  if(!drag.moved)return;
+  const view=$('viewport').getBoundingClientRect();
+  const left=Math.min(drag.startClientX,event.clientX),top=Math.min(drag.startClientY,event.clientY);
+  const right=Math.max(drag.startClientX,event.clientX),bottom=Math.max(drag.startClientY,event.clientY);
+  const box=$('selectionBox');box.hidden=false;
+  Object.assign(box.style,{left:`${left-view.left}px`,top:`${top-view.top}px`,width:`${right-left}px`,height:`${bottom-top}px`});
+  selectedCards=new Set(drag.baseIds);
+  document.querySelectorAll('[data-kind="card"]').forEach(el=>{
+    const rect=el.getBoundingClientRect();
+    if(rect.left<right&&rect.right>left&&rect.top<bottom&&rect.bottom>top)selectedCards.add(el.dataset.id);
+  });
+  renderSelection();
+}
+window.addEventListener('pointermove',event=>{if(!drag)return;if(drag.kind==='marquee'){updateMarquee(event);return;}if(drag.kind==='pan'){pan.x=drag.x+event.clientX-drag.startClientX;pan.y=drag.y+event.clientY-drag.startClientY;$('world').style.transform=`translate(${pan.x}px,${pan.y}px) scale(${scale})`;return;}const pos=worldPoint(event);const dx=pos.x-drag.startX,dy=pos.y-drag.startY;if(Math.abs(dx)+Math.abs(dy)>2)drag.moved=true;const el=document.querySelector(`[data-kind="${drag.kind}"][data-id="${drag.id}"]`);if(el){el.style.left=`${Math.round(drag.x+dx)}px`;el.style.top=`${Math.round(drag.y+dy)}px`;}});
 window.addEventListener('pointerup',event=>{
   if(!drag)return;
+  if(drag.kind==='marquee'){updateMarquee(event);$('selectionBox').hidden=true;drag=null;return;}
   if(drag.kind==='pan'){$('viewport').classList.remove('panning');drag=null;return;}
   if(drag.moved){
     snapshot();
@@ -165,21 +291,66 @@ window.addEventListener('pointerup',event=>{
   }
   drag=null;
 });
-function setTool(next){tool=next;$('selectTool').classList.toggle('active',next==='select');$('panTool').classList.toggle('active',next==='pan');}
+function openSelectionMenu(event){
+  const cardEl=event.target.closest('[data-kind="card"]');
+  if(cardEl&&!selectedCards.has(cardEl.dataset.id)){
+    selectedCards=new Set([cardEl.dataset.id]);selected={kind:'card',id:cardEl.dataset.id};renderSelection();
+  }
+  if(!selectedCards.size)return;
+  const menu=$('selectionMenu');
+  menu.innerHTML=`<div class="selection-menu-title">已选择 ${selectedCards.size} 张卡片</div>
+    <button type="button" data-batch-hide>隐藏所选</button>
+    <button type="button" data-batch-delete class="danger">删除所选</button>
+    <div class="selection-menu-label">分组</div>
+    <button type="button" data-new-group>新建分组并归入</button>
+    ${state.groups.map(group=>`<button type="button" data-assign-group="${clean(group.id)}">加入：${clean(group.name)}</button>`).join('')}
+    <button type="button" data-ungroup>从当前分组移出</button>`;
+  menu.hidden=false;
+  menu.style.left=`${Math.max(8,Math.min(event.clientX,window.innerWidth-menu.offsetWidth-8))}px`;
+  menu.style.top=`${Math.max(8,Math.min(event.clientY,window.innerHeight-menu.offsetHeight-8))}px`;
+  menu.querySelector('[data-batch-hide]').onclick=hideSelectedCards;
+  menu.querySelector('[data-batch-delete]').onclick=deleteSelectedCards;
+  menu.querySelector('[data-new-group]').onclick=()=>{
+    hideSelectionMenu();
+    openTextDialog({title:'新分组名称',onSave:createGroupFromSelection});
+  };
+  menu.querySelector('[data-ungroup]').onclick=removeSelectionFromGroups;
+  menu.querySelectorAll('[data-assign-group]').forEach(button=>button.onclick=()=>addSelectionToGroup(button.dataset.assignGroup));
+}
+$('viewport').addEventListener('contextmenu',event=>{
+  if(event.target.closest('input,textarea,a'))return;
+  event.preventDefault();openSelectionMenu(event);
+});
+document.addEventListener('pointerdown',event=>{if(!event.target.closest('#selectionMenu'))hideSelectionMenu();});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'){hideSelectionMenu();selectedCards.clear();selected=null;renderSelection();}
+  if(event.key==='Delete'&&!$('editDialog').open&&!$('captureDialog').open&&!event.target.closest('input,textarea,[contenteditable]')&&selectedCards.size)deleteSelectedCards();
+});
+function setTool(next){tool=next;hideSelectionMenu();$('selectTool').classList.toggle('active',next==='select');$('panTool').classList.toggle('active',next==='pan');}
 $('selectTool').onclick=()=>setTool('select');$('panTool').onclick=()=>setTool('pan');
 function zoomTo(next){scale=Math.min(1.7,Math.max(.35,next));render();}
 $('zoomIn').onclick=()=>zoomTo(scale*1.2);$('zoomOut').onclick=()=>zoomTo(scale/1.2);$('fitView').onclick=()=>{const visibleCards=state.cards.filter(card=>!card.hidden),visibleNotes=state.notes.filter(note=>!note.cardId||visibleCards.some(card=>card.id===note.cardId));const maxX=Math.max(1100,...state.groups.map(g=>g.x+g.w),...visibleCards.map(c=>c.x+300),...visibleNotes.map(n=>n.x+220));const maxY=Math.max(650,...state.groups.map(g=>g.y+g.h),...visibleNotes.map(n=>n.y+180));scale=Math.min(1,$('viewport').clientWidth/(maxX+50),$('viewport').clientHeight/(maxY+50));pan={x:20,y:20};render()};
 $('viewport').addEventListener('wheel',event=>{if(event.ctrlKey){event.preventDefault();zoomTo(scale*(event.deltaY<0?1.1:.9))}},{passive:false});
-$('addGroup').onclick=()=>{const name=prompt('新分组名称');if(!name?.trim())return;snapshot();state.groups.push({id:uid(),name:name.trim(),description:'',x:150-pan.x/scale,y:130-pan.y/scale,w:440,h:440});commit()};
-$('addNote').onclick=()=>{const text=prompt('写下对素材的想法');if(!text?.trim())return;snapshot();state.notes.push({id:uid(),text:text.trim(),x:200-pan.x/scale,y:180-pan.y/scale,groupId:null});commit()};
-function editNote(id){const note=state.notes.find(n=>n.id===id),text=prompt('修改便签，留空可删除',note.text);if(text===null)return;snapshot();const card=state.cards.find(c=>c.id===note.cardId);if(text.trim())note.text=text.trim();else state.notes=state.notes.filter(n=>n.id!==id);if(card){card.memo=text.trim();card.corrections=(card.corrections||0)+1;}commit()}
+$('addGroup').onclick=()=>openTextDialog({title:'新分组名称',onSave:name=>{snapshot();state.groups.push({id:uid(),name,description:'',x:150-pan.x/scale,y:130-pan.y/scale,w:440,h:440});commit();}});
+$('addNote').onclick=()=>openTextDialog({title:'写下对素材的想法',multiline:true,onSave:text=>{snapshot();state.notes.push({id:uid(),text,x:200-pan.x/scale,y:180-pan.y/scale,groupId:null});commit();}});
+function editNote(id){
+  const note=state.notes.find(item=>item.id===id);if(!note)return;
+  openTextDialog({title:'修改便签，留空可删除',value:note.text,multiline:true,allowEmpty:true,onSave:text=>{
+    const current=state.notes.find(item=>item.id===id);if(!current)return;
+    snapshot();
+    const card=state.cards.find(item=>item.id===current.cardId);
+    if(text)current.text=text;else state.notes=state.notes.filter(item=>item.id!==id);
+    if(card){card.memo=text;card.corrections=(card.corrections||0)+1;}
+    commit();
+  }});
+}
 function openEdit(id){editing=id;const card=state.cards.find(c=>c.id===id);$('editTitle').value=card.title;$('editText').value=card.text;$('editSource').value=card.source;$('editSourceUrl').value=card.sourceUrl||'';$('editMemo').value=card.memo;$('editTags').value=card.tags.join('，');$('editIntent').value=card.intent;$('editGroup').innerHTML='<option value="">未分组</option>'+state.groups.map(g=>`<option value="${clean(g.id)}">${clean(g.name)}</option>`).join('');$('editGroup').value=card.groupId||'';$('editStatus').value=card.status;$('editDialog').showModal()}
 $('editClose').onclick=()=>$('editDialog').close();
 $('editDelete').onclick=()=>deleteCard(editing);
 $('editForm').onsubmit=event=>{event.preventDefault();snapshot();const card=state.cards.find(c=>c.id===editing);card.title=$('editTitle').value.trim();card.text=$('editText').value.trim();card.source=$('editSource').value.trim();card.sourceUrl=$('editSourceUrl').value.trim();card.memo=$('editMemo').value.trim();card.tags=$('editTags').value.split(/[,，]/).map(t=>t.trim()).filter(Boolean);card.intent=$('editIntent').value.trim();card.groupId=$('editGroup').value||null;card.status=$('editStatus').value;card.corrections=(card.corrections||0)+1;syncMemoNote(card);$('editDialog').close();commit()};
 $('topic').onchange=()=>{snapshot();state.topic=$('topic').value.trim();commit()};
-$('undoBtn').onclick=()=>{if(!undo.length)return;redo.push(JSON.stringify(state));state=JSON.parse(undo.pop());commit()};
-$('redoBtn').onclick=()=>{if(!redo.length)return;undo.push(JSON.stringify(state));state=JSON.parse(redo.pop());commit()};
+$('undoBtn').onclick=()=>{if(!undo.length)return;redo.push(JSON.stringify(state));state=JSON.parse(undo.pop());selectedCards.clear();selected=null;hideSelectionMenu();commit()};
+$('redoBtn').onclick=()=>{if(!redo.length)return;undo.push(JSON.stringify(state));state=JSON.parse(redo.pop());selectedCards.clear();selected=null;hideSelectionMenu();commit()};
 $('exportData').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));a.download='contexty-canvas.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
 $('importData').onclick=()=>$('importFile').click();
 $('importFile').onchange=async event=>{try{const data=JSON.parse(await event.target.files[0].text());if(!Array.isArray(data.groups)||!Array.isArray(data.cards))throw Error('格式不正确');snapshot();state={...data,notes:data.notes||[]};migrateScreenshotCards();commit()}catch(error){alert(error.message)}};
