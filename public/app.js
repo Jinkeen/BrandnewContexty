@@ -39,7 +39,7 @@ function migrateScreenshotCards(){
 }
 const migrated=migrateScreenshotCards();
 if(migrated)localStorage.setItem(key,JSON.stringify(state));
-let selected=null, selectedCards=new Set(), tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null, textDialogAction=null, activeNoteSelection=null, aiRequestPending=false;
+let selected=null, selectedCards=new Set(), spaceHeld=false, scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null, textDialogAction=null, activeNoteSelection=null, aiRequestPending=false;
 const editingNoteIds=new Set();
 const undo=[], redo=[];
 function snapshot(){undo.push(JSON.stringify(state));if(undo.length>30)undo.shift();redo.length=0;}
@@ -345,7 +345,7 @@ $('assistForm').onsubmit=event=>{event.preventDefault();const instruction=$('ass
 function focusItem(id){const item=[...state.cards,...state.groups,...state.notes].find(v=>v.id===id);if(!item)return;if(state.cards.includes(item)&&item.hidden){showCard(id);return;}selected={id,kind:state.cards.includes(item)?'card':state.groups.includes(item)?'group':'note'};selectedCards=state.cards.includes(item)?new Set([id]):new Set();pan={x:Math.max(10,$('viewport').clientWidth/2-item.x*scale-140),y:Math.max(10,$('viewport').clientHeight/2-item.y*scale-100)};render();}
 function worldPoint(event){const rect=$('viewport').getBoundingClientRect();return{x:(event.clientX-rect.left-pan.x)/scale,y:(event.clientY-rect.top-pan.y)/scale};}
 function startDrag(event){
-  if(event.button!==0||event.target.closest('button,input,textarea,a'))return;
+  if(event.button!==0||spaceHeld||event.target.closest('button,input,textarea,a'))return;
   const kind=event.currentTarget.dataset.kind,id=event.currentTarget.dataset.id;
   if(kind==='group'&&!event.target.closest('.group-handle'))return;
   if(kind==='card'&&(event.shiftKey||event.ctrlKey)){
@@ -362,18 +362,21 @@ function startDrag(event){
 }
 function renderSelection(){document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('selected',el.dataset.kind==='card'?selectedCards.has(el.dataset.id):el.dataset.id===selected?.id));}
 $('viewport').onpointerdown=event=>{
-  if(event.button!==0)return;
+  if(event.button!==0&&event.button!==2)return;
+  if(event.button===2&&event.target.closest('input,textarea,a'))return;
   const targetItem=event.target.closest('[data-kind]');
-  if(targetItem&&(targetItem.dataset.kind!=='group'||event.target.closest('.group-handle')))return;
+  if(event.button===0&&!spaceHeld){
+    if(targetItem&&(targetItem.dataset.kind!=='group'||event.target.closest('.group-handle')))return;
+    hideSelectionMenu();selected=null;selectedCards.clear();renderSelection();return;
+  }
+  event.preventDefault();
   hideSelectionMenu();
-  if(tool==='pan'){
+  if(event.button===0){
     selected=null;selectedCards.clear();
     drag={kind:'pan',startClientX:event.clientX,startClientY:event.clientY,x:pan.x,y:pan.y,moved:false};
     $('viewport').classList.add('panning');
   }else{
-    selected=null;
-    drag={kind:'marquee',startClientX:event.clientX,startClientY:event.clientY,baseIds:event.shiftKey?new Set(selectedCards):new Set(),moved:false};
-    if(!event.shiftKey)selectedCards.clear();
+    drag={kind:'marquee',button:2,startClientX:event.clientX,startClientY:event.clientY,baseIds:event.shiftKey?new Set(selectedCards):new Set(),moved:false};
   }
   $('viewport').setPointerCapture(event.pointerId);renderSelection();
 };
@@ -396,7 +399,12 @@ function updateMarquee(event){
 window.addEventListener('pointermove',event=>{if(!drag)return;if(drag.kind==='marquee'){updateMarquee(event);return;}if(drag.kind==='pan'){pan.x=drag.x+event.clientX-drag.startClientX;pan.y=drag.y+event.clientY-drag.startClientY;$('world').style.transform=`translate(${pan.x}px,${pan.y}px) scale(${scale})`;return;}const pos=worldPoint(event);const dx=pos.x-drag.startX,dy=pos.y-drag.startY;if(Math.abs(dx)+Math.abs(dy)>2)drag.moved=true;const el=document.querySelector(`[data-kind="${drag.kind}"][data-id="${drag.id}"]`);if(el){el.style.left=`${Math.round(drag.x+dx)}px`;el.style.top=`${Math.round(drag.y+dy)}px`;}});
 window.addEventListener('pointerup',event=>{
   if(!drag)return;
-  if(drag.kind==='marquee'){updateMarquee(event);$('selectionBox').hidden=true;drag=null;return;}
+  if(drag.kind==='marquee'){
+    updateMarquee(event);const moved=drag.moved;
+    $('selectionBox').hidden=true;drag=null;
+    if(!moved||selectedCards.size)openSelectionMenu(event);
+    return;
+  }
   if(drag.kind==='pan'){$('viewport').classList.remove('panning');drag=null;return;}
   if(drag.moved){
     snapshot();
@@ -427,6 +435,7 @@ window.addEventListener('pointerup',event=>{
   }
   drag=null;
 });
+window.addEventListener('pointercancel',()=>{if(drag?.kind==='marquee')$('selectionBox').hidden=true;if(drag?.kind==='pan')$('viewport').classList.remove('panning');drag=null;});
 function openSelectionMenu(event){
   const cardEl=event.target.closest('[data-kind="card"]');
   if(cardEl&&!selectedCards.has(cardEl.dataset.id)){
@@ -455,20 +464,29 @@ function openSelectionMenu(event){
 }
 $('viewport').addEventListener('contextmenu',event=>{
   if(event.target.closest('input,textarea,a'))return;
-  event.preventDefault();openSelectionMenu(event);
+  event.preventDefault();
 });
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#selectionMenu'))hideSelectionMenu();});
 document.addEventListener('keydown',event=>{
+  if(event.code==='Space'&&!event.target.closest('input,textarea,[contenteditable]')&&!document.querySelector('dialog[open]')){
+    event.preventDefault();spaceHeld=true;$('viewport').classList.add('space-pan');
+  }
   if(event.key==='Escape'){hideSelectionMenu();selectedCards.clear();selected=null;renderSelection();}
   if(event.key==='Delete'&&!$('editDialog').open&&!$('captureDialog').open&&!event.target.closest('input,textarea,[contenteditable]')&&selectedCards.size)deleteSelectedCards();
 });
-function setTool(next){tool=next;hideSelectionMenu();$('selectTool').classList.toggle('active',next==='select');$('panTool').classList.toggle('active',next==='pan');}
-$('selectTool').onclick=()=>setTool('select');$('panTool').onclick=()=>setTool('pan');
+document.addEventListener('keyup',event=>{if(event.code==='Space'){spaceHeld=false;$('viewport').classList.remove('space-pan');}});
+window.addEventListener('blur',()=>{spaceHeld=false;$('viewport').classList.remove('space-pan');});
 function zoomTo(next){scale=Math.min(1.7,Math.max(.35,next));render();}
 $('zoomIn').onclick=()=>zoomTo(scale*1.2);$('zoomOut').onclick=()=>zoomTo(scale/1.2);$('fitView').onclick=()=>{const visibleCards=state.cards.filter(card=>!card.hidden),visibleNotes=state.notes.filter(visibleNote);const maxX=Math.max(1100,...state.groups.map(g=>g.x+g.w),...visibleCards.map(c=>c.x+300),...visibleNotes.map(n=>n.x+(n.parentNoteId?260:220)));const maxY=Math.max(650,...state.groups.map(g=>g.y+g.h),...visibleNotes.map(n=>n.y+220));scale=Math.min(1,$('viewport').clientWidth/(maxX+50),$('viewport').clientHeight/(maxY+50));pan={x:20,y:20};render()};
 $('viewport').addEventListener('wheel',event=>{if(event.ctrlKey){event.preventDefault();zoomTo(scale*(event.deltaY<0?1.1:.9))}},{passive:false});
 $('addGroup').onclick=()=>openTextDialog({title:'新分组名称',onSave:name=>{snapshot();state.groups.push({id:uid(),name,description:'',x:150-pan.x/scale,y:130-pan.y/scale,w:440,h:440});commit();}});
-$('addNote').onclick=()=>openTextDialog({title:'写下对素材的想法',multiline:true,onSave:text=>{snapshot();state.notes.push({id:uid(),text,x:200-pan.x/scale,y:180-pan.y/scale,groupId:null});commit();}});
+$('addNote').onclick=()=>{
+  const rect=$('viewport').getBoundingClientRect();
+  const point=worldPoint({clientX:rect.left+rect.width/2,clientY:rect.top+rect.height/2});
+  const note={id:uid(),text:'',x:Math.max(0,Math.round(point.x-95)),y:Math.max(0,Math.round(point.y-70)),groupId:null};
+  snapshot();state.notes.push(note);selected={kind:'note',id:note.id};commit();
+  document.querySelector(`[data-note-text="${note.id}"]`)?.focus();
+};
 function editNote(id){
   const note=state.notes.find(item=>item.id===id);if(!note)return;
   openTextDialog({title:'修改便签，留空可删除',value:note.text,multiline:true,allowEmpty:true,onSave:text=>{

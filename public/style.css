@@ -61,3 +61,6 @@
 #assistStatus{min-height:0;margin:6px 0 0;color:#a6433a;font-size:10px;line-height:1.4}
 .card-ai button[data-refresh-relevance]{float:right;border:0;background:transparent;color:#587fc0;font-size:10px;padding:0 2px}
 .card-ai button[data-refresh-relevance]:hover{text-decoration:underline}
+.viewport{cursor:default}
+.viewport.space-pan{cursor:grab}
+.viewport.panning{cursor:grabbing}
