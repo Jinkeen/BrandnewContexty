@@ -1,6 +1,9 @@
 const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, screen } = require('electron');
-const { spawn } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const path = require('node:path');
+const { promisify } = require('node:util');
+
+const execFileAsync = promisify(execFile);
 
 const projectRoot = path.resolve(__dirname, '..');
 const port = Number(process.env.CONTEXTY_DESKTOP_PORT || 4174);
@@ -9,7 +12,26 @@ let mainWindow;
 let captureWindow;
 let serverProcess;
 let canvasReady = false;
+let captureProvenance = null;
 const pendingCaptures = [];
+
+async function readProvenance() {
+  if (process.platform !== 'win32') return { source: '当前应用', sourceTitle: '', sourceUrl: '' };
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', path.join(__dirname, 'provenance.ps1')
+    ], { windowsHide: true, timeout: 3000, maxBuffer: 20_000 });
+    const data = JSON.parse(Buffer.from(stdout.trim(), 'base64').toString('utf8'));
+    return {
+      source: String(data.source || '当前应用').slice(0, 100),
+      sourceTitle: String(data.sourceTitle || '').slice(0, 200),
+      sourceUrl: String(data.sourceUrl || '').slice(0, 2000)
+    };
+  } catch {
+    return { source: '当前应用', sourceTitle: '', sourceUrl: '' };
+  }
+}
 
 async function serverIsReady() {
   try {
@@ -53,6 +75,7 @@ function createMainWindow() {
 async function startCapture() {
   if (captureWindow) { captureWindow.focus(); return; }
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const provenance = readProvenance();
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: {
@@ -62,6 +85,7 @@ async function startCapture() {
   });
   const source = sources.find(item => item.display_id === String(display.id)) || sources[0];
   if (!source || source.thumbnail.isEmpty()) throw new Error('无法读取当前屏幕。');
+  captureProvenance = await provenance;
   captureWindow = new BrowserWindow({
     x: display.bounds.x,
     y: display.bounds.y,
@@ -90,6 +114,7 @@ async function startCapture() {
 
 function closeCapture() {
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.close();
+  captureProvenance = null;
 }
 
 ipcMain.on('capture:cancel', closeCapture);
@@ -109,7 +134,7 @@ ipcMain.handle('capture:save', (event, data) => {
   if (!memo || typeof image !== 'string' || !/^data:image\/jpeg;base64,/.test(image) || image.length > 5_000_000) {
     throw new Error('请框选区域并填写想法');
   }
-  const capture = { image, memo, source: '屏幕截图', createdAt: Date.now() };
+  const capture = { image, memo, ...captureProvenance, createdAt: Date.now() };
   if (canvasReady && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('contexty:capture', capture);
   else pendingCaptures.push(capture);
   closeCapture();

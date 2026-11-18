@@ -56,7 +56,7 @@ const server = http.createServer(async (req, res) => {
         const card = { text, memo, tags: [] };
         return send(res, 200, { mode: 'rule', title: (text || memo).slice(0, 18), intent: inferIntent(memo), tags: [], groupId: suggestGroup(card, groups) });
       }
-      const content = [{ type: 'input_text', text: `当前脚本主题：${String(data.topic || '').slice(0, 1000)}\n素材文字：${text}\n用户当时的想法：${memo}\n现有分组：${groups.map(g => `${g.id}: ${g.name}`).join('; ')}\n请返回 JSON 对象，包含 title、intent、tags（字符串数组）、groupId（现有分组 id 或 null）。理解用户想法时保留不确定性，不得补造素材内容。` }];
+      const content = [{ type: 'input_text', text: `当前脚本主题：${String(data.topic || '').slice(0, 1000)}\n素材文字：${text}\n用户当时的想法：${memo}\n现有分组：${groups.map(g => `${g.id}: ${g.name}`).join('; ')}\n请返回 JSON 对象，包含 title、intent、tags（字符串数组）、groupId（现有分组 id 或 null）。title 概括所截素材本身的内容，不要把用户想法当作标题。理解用户想法时保留不确定性，不得补造素材内容。` }];
       if (typeof data.image === 'string' && /^data:image\/(jpeg|png);base64,/.test(data.image)) content.push({ type: 'input_image', image_url: data.image });
       const response = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: process.env.OPENAI_MODEL || 'gpt-4.1-mini', input: [{ role: 'user', content }] }) });
       const result = await response.json();
