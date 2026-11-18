@@ -28,6 +28,18 @@ export function inferIntent(memo) {
   return `用户的使用意图：${value}`;
 }
 
+export function replaceSelectedSegment(fullText, selectedText, replacement, start, end) {
+  const source = String(fullText);
+  const selected = String(selectedText);
+  if (!selected) return null;
+  let at = Number.isInteger(start) && Number.isInteger(end) && source.slice(start, end) === selected ? start : -1;
+  if (at < 0) {
+    at = source.indexOf(selected);
+    if (at < 0 || source.indexOf(selected, at + selected.length) >= 0) return null;
+  }
+  return source.slice(0, at) + String(replacement) + source.slice(at + selected.length);
+}
+
 export function relevantCards(question, cards, groups) {
   const query = new Set(terms(question));
   const groupNames = Object.fromEntries(groups.map(group => [group.id, group.name]));

@@ -1,4 +1,4 @@
-import { suggestGroup, inferIntent } from '/core.mjs';
+import { suggestGroup, inferIntent, replaceSelectedSegment } from '/core.mjs';
 
 const $ = id => document.getElementById(id);
 const key = 'brandnew-contexty-canvas-v2';
@@ -39,10 +39,24 @@ function migrateScreenshotCards(){
 }
 const migrated=migrateScreenshotCards();
 if(migrated)localStorage.setItem(key,JSON.stringify(state));
-let selected=null, selectedCards=new Set(), tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null, textDialogAction=null;
+let selected=null, selectedCards=new Set(), tool='select', scale=.82, pan={x:20,y:30}, drag=null, editing=null, capture=null, textDialogAction=null, activeNoteSelection=null, aiRequestPending=false;
+const editingNoteIds=new Set();
 const undo=[], redo=[];
 function snapshot(){undo.push(JSON.stringify(state));if(undo.length>30)undo.shift();redo.length=0;}
-function commit(){selectedCards=new Set([...selectedCards].filter(id=>state.cards.some(card=>card.id===id&&!card.hidden)));localStorage.setItem(key,JSON.stringify(state));render();}
+function hideSelectionAssist(){$('selectionAssist').hidden=true;activeNoteSelection=null;$('assistStatus').textContent='';}
+function visibleNote(note){
+  if(note.parentNoteId){
+    const parent=state.notes.find(item=>item.id===note.parentNoteId);
+    return !!parent&&!parent.parentNoteId&&visibleNote(parent);
+  }
+  return !note.cardId||state.cards.some(card=>card.id===note.cardId&&!card.hidden);
+}
+function commit(){
+  const noteIds=new Set(state.notes.filter(note=>!note.parentNoteId).map(note=>note.id));
+  state.notes=state.notes.filter(note=>!note.parentNoteId||noteIds.has(note.parentNoteId));
+  selectedCards=new Set([...selectedCards].filter(id=>state.cards.some(card=>card.id===id&&!card.hidden)));
+  hideSelectionAssist();localStorage.setItem(key,JSON.stringify(state));render();
+}
 function openTextDialog({title,value='',multiline=false,allowEmpty=false,onSave}){
   const field=$(multiline?'textDialogTextarea':'textDialogInput');
   $('textDialogTitle').textContent=title;
@@ -115,6 +129,10 @@ function cardDimensions(card){
   const el=[...document.querySelectorAll('[data-kind="card"]')].find(item=>item.dataset.id===card.id);
   return {width:el?.offsetWidth||280,height:el?.offsetHeight||280};
 }
+function notesForCard(id){
+  const parent=state.notes.find(note=>note.cardId===id);
+  return parent?[parent,...state.notes.filter(note=>note.parentNoteId===parent.id)]:[];
+}
 function createGroupFromSelection(name){
   const cards=selectedCardItems();if(!cards.length)return;
   let minX=Infinity,minY=Infinity,maxX=0,maxY=0;
@@ -122,14 +140,16 @@ function createGroupFromSelection(name){
     const size=cardDimensions(card);
     minX=Math.min(minX,card.x);minY=Math.min(minY,card.y);
     maxX=Math.max(maxX,card.x+size.width);maxY=Math.max(maxY,card.y+size.height);
-    const note=state.notes.find(item=>item.cardId===card.id);
-    if(note){minX=Math.min(minX,note.x);minY=Math.min(minY,note.y);maxX=Math.max(maxX,note.x+210);maxY=Math.max(maxY,note.y+145);}
+    for(const note of notesForCard(card.id)){
+      minX=Math.min(minX,note.x);minY=Math.min(minY,note.y);
+      maxX=Math.max(maxX,note.x+(note.parentNoteId?250:210));maxY=Math.max(maxY,note.y+145);
+    }
   }
   const x=Math.max(0,minX-25),y=Math.max(0,minY-52);
   snapshot();
   const group={id:uid(),name:name.trim(),description:'',x,y,w:Math.max(370,maxX-x+25),h:Math.max(250,maxY-y+30)};
   state.groups.push(group);
-  for(const card of cards){card.groupId=group.id;card.corrections=(card.corrections||0)+1;const note=state.notes.find(item=>item.cardId===card.id);if(note)note.groupId=group.id;}
+  for(const card of cards){card.groupId=group.id;card.corrections=(card.corrections||0)+1;for(const note of notesForCard(card.id))note.groupId=group.id;}
   selectedCards.clear();selected={kind:'group',id:group.id};commit();
 }
 function addSelectionToGroup(id){
@@ -139,12 +159,12 @@ function addSelectionToGroup(id){
   const existing=state.cards.filter(card=>card.groupId===id&&!selectedCards.has(card.id)&&!card.hidden);
   let nextY=Math.max(group.y+55,...existing.map(card=>card.y+cardDimensions(card).height+25));
   for(const card of cards){
-    const size=cardDimensions(card),note=state.notes.find(item=>item.cardId===card.id);
-    const noteOffset=note?{x:note.x-card.x,y:note.y-card.y}:null;
+    const size=cardDimensions(card),notes=notesForCard(card.id);
+    const offsets=notes.map(note=>({note,x:note.x-card.x,y:note.y-card.y}));
     card.x=group.x+25;card.y=nextY;card.groupId=id;card.corrections=(card.corrections||0)+1;
-    if(note){note.x=card.x+noteOffset.x;note.y=card.y+noteOffset.y;note.groupId=id;group.w=Math.max(group.w,note.x+210-group.x+25);}
+    for(const item of offsets){item.note.x=card.x+item.x;item.note.y=card.y+item.y;item.note.groupId=id;group.w=Math.max(group.w,item.note.x+(item.note.parentNoteId?250:210)-group.x+25);}
     group.w=Math.max(group.w,card.x+size.width-group.x+25);
-    nextY+=Math.max(size.height,note?noteOffset.y+145:0)+28;
+    nextY+=Math.max(size.height,...offsets.map(item=>item.y+145))+28;
   }
   group.h=Math.max(group.h,nextY-group.y+15);
   selectedCards.clear();selected={kind:'group',id};commit();focusItem(id);
@@ -155,6 +175,11 @@ function removeSelectionFromGroups(){
   hideSelectionMenu();commit();
 }
 function statusLabel(status){return {current:'当前脚本',future:'未来选题',unused:'暂不使用'}[status]||'当前脚本';}
+function relevanceText(card){
+  return card.relevanceTopic===state.topic&&['高','中','低'].includes(card.relevance)
+    ? `${card.relevance}相关：${card.relevanceReason||'暂无理由'}`
+    : '待评估当前脚本主题';
+}
 function sourceLink(url){
   try{const parsed=new URL(url);return ['http:','https:'].includes(parsed.protocol)?parsed.href:''}
   catch{return ''}
@@ -169,23 +194,36 @@ function cardHtml(card){
     ${card.image?`<img class="card-image" src="${card.image}" alt="捕捉的屏幕区域">`:''}
     ${card.text?`<div class="card-body">${clean(card.text)}</div>`:''}
     <div class="card-tags">${tags}<input class="tag-input" data-tag-input="${clean(card.id)}" placeholder="+ 标签" aria-label="添加标签"><span class="status-chip">${statusLabel(card.status)}</span></div>
-    <div class="card-ai"><b>◇ ${card.interpretMode==='ai'?'AI 理解':'系统初步理解'}</b><p>${clean(card.intent)}</p></div>
+    <div class="card-ai"><b>◇ 与脚本主题的相关度</b><button type="button" data-refresh-relevance="${clean(card.id)}" title="按左侧当前主题重新评估">重新评估</button><p>${clean(relevanceText(card))}</p></div>
     ${!card.image?`<div class="card-memo">✎ 我的想法：${clean(card.memo||'未填写')}</div>`:''}
   </div>`;
 }
 function groupHtml(group){return `<div class="canvas-group ${selected?.id===group.id?'selected':''}" data-kind="group" data-id="${clean(group.id)}" style="left:${group.x}px;top:${group.y}px;width:${group.w}px;height:${group.h}px"><div class="group-handle"><span>▣ ${clean(group.name)} · ${state.cards.filter(c=>c.groupId===group.id).length} 条</span><button type="button" data-dissolve-group="${clean(group.id)}" title="解除分组，保留全部素材和便签">解除分组</button></div></div>`;}
-function noteHtml(note){return `<div class="sticky-note ${note.cardId?'linked-note':''} ${selected?.id===note.id?'selected':''}" data-kind="note" data-id="${clean(note.id)}" style="left:${note.x}px;top:${note.y}px" title="双击修改想法">${note.cardId?'<small>我的想法</small>':''}<div>${clean(note.text)}</div></div>`;}
+function noteHtml(note){
+  const suggestion=!!note.parentNoteId;
+  return `<div class="sticky-note ${suggestion?'suggestion-note':note.cardId?'linked-note':''} ${selected?.id===note.id?'selected':''}" data-kind="note" data-id="${clean(note.id)}" style="left:${note.x}px;top:${note.y}px">
+    <small>${suggestion?'AI 建议':note.cardId?'我的想法':'便签'}</small>
+    ${suggestion?`<div class="suggestion-request">要求：${clean(note.instruction||'改写')}</div>`:''}
+    <textarea class="note-text" data-note-text="${clean(note.id)}" aria-label="${suggestion?'编辑 AI 建议':'编辑便签内容'}">${clean(note.text)}</textarea>
+    ${suggestion?`<div class="suggestion-actions"><button type="button" class="adopt" data-adopt-suggestion="${clean(note.id)}">采用这版</button><button type="button" data-discard-suggestion="${clean(note.id)}">舍弃</button></div>`:''}
+  </div>`;
+}
 function noteLinksHtml(){
-  const paths=state.notes.filter(note=>note.cardId).map(note=>{
+  const cardPaths=state.notes.filter(note=>note.cardId&&visibleNote(note)).map(note=>{
     const card=state.cards.find(item=>item.id===note.cardId&&!item.hidden);
     if(!card)return '';
     const fromX=Number(note.x)||0,fromY=(Number(note.y)||0)+55,toX=(Number(card.x)||0)+280,toY=(Number(card.y)||0)+95;
     return `<path d="M ${fromX} ${fromY} C ${fromX-35} ${fromY}, ${toX+35} ${toY}, ${toX} ${toY}" marker-end="url(#note-arrow)"/>`;
   }).join('');
-  return `<svg class="note-links" viewBox="0 0 2400 1800" aria-hidden="true"><defs><marker id="note-arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z"/></marker></defs>${paths}</svg>`;
+  const suggestionPaths=state.notes.filter(note=>note.parentNoteId&&visibleNote(note)).map(note=>{
+    const parent=state.notes.find(item=>item.id===note.parentNoteId);
+    const fromX=parent.x+(parent.cardId?210:190),fromY=parent.y+80,toX=note.x,toY=note.y+80;
+    return `<path class="suggestion-link" d="M ${fromX} ${fromY} C ${fromX+40} ${fromY}, ${toX-40} ${toY}, ${toX} ${toY}" marker-end="url(#note-arrow)"/>`;
+  }).join('');
+  return `<svg class="note-links" viewBox="0 0 2400 1800" aria-hidden="true"><defs><marker id="note-arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z"/></marker></defs>${cardPaths}${suggestionPaths}</svg>`;
 }
 function render(){
-  $('world').innerHTML=state.groups.map(groupHtml).join('')+noteLinksHtml()+state.cards.filter(card=>!card.hidden).map(cardHtml).join('')+state.notes.filter(note=>!note.cardId||state.cards.some(card=>card.id===note.cardId&&!card.hidden)).map(noteHtml).join('');
+  $('world').innerHTML=state.groups.map(groupHtml).join('')+noteLinksHtml()+state.cards.filter(card=>!card.hidden).map(cardHtml).join('')+state.notes.filter(visibleNote).map(noteHtml).join('');
   $('world').style.transform=`translate(${pan.x}px,${pan.y}px) scale(${scale})`;
   $('zoomLabel').textContent=`${Math.round(scale*100)}%`;
   $('overviewCount').textContent=`(${state.cards.length})`;
@@ -208,8 +246,102 @@ function render(){
     el.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();add();}};
     el.onchange=add;
   });
+  document.querySelectorAll('[data-note-text]').forEach(el=>{
+    el.oninput=()=>updateNoteText(el.dataset.noteText,el.value);
+    el.onblur=()=>editingNoteIds.delete(el.dataset.noteText);
+    el.onmouseup=event=>captureNoteSelection(el,event);
+    el.onkeyup=event=>captureNoteSelection(el,event);
+  });
+  document.querySelectorAll('[data-adopt-suggestion]').forEach(el=>el.onclick=event=>{event.stopPropagation();adoptSuggestion(el.dataset.adoptSuggestion);});
+  document.querySelectorAll('[data-discard-suggestion]').forEach(el=>el.onclick=event=>{event.stopPropagation();discardSuggestion(el.dataset.discardSuggestion);});
+  document.querySelectorAll('[data-refresh-relevance]').forEach(el=>el.onclick=event=>{event.stopPropagation();refreshRelevance(el.dataset.refreshRelevance);});
   document.querySelectorAll('[data-kind]').forEach(el=>{el.onpointerdown=startDrag;el.ondblclick=event=>{if(event.target.closest('button,input,textarea,a'))return;if(el.dataset.kind==='card')openEdit(el.dataset.id);if(el.dataset.kind==='note')editNote(el.dataset.id)};});
 }
+function updateNoteText(id,value){
+  const note=state.notes.find(item=>item.id===id);if(!note||note.text===value)return;
+  if(!editingNoteIds.has(id)){snapshot();editingNoteIds.add(id);}
+  note.text=value;
+  const card=state.cards.find(item=>item.id===note.cardId);
+  if(card){card.memo=value;card.corrections=(card.corrections||0)+1;}
+  localStorage.setItem(key,JSON.stringify(state));
+}
+function captureNoteSelection(field,event){
+  const note=state.notes.find(item=>item.id===field.dataset.noteText);
+  if(!note||note.parentNoteId||field.selectionEnd<=field.selectionStart){
+    if(activeNoteSelection?.noteId===field.dataset.noteText)hideSelectionAssist();
+    return;
+  }
+  const start=field.selectionStart,end=field.selectionEnd;
+  activeNoteSelection={noteId:note.id,start,end,text:field.value.slice(start,end)};
+  $('assistSnippet').textContent=activeNoteSelection.text.slice(0,240);
+  $('assistStatus').textContent='';$('assistInstruction').value='';
+  const assist=$('selectionAssist');assist.hidden=false;
+  const rect=field.getBoundingClientRect();
+  const preferredX=event.clientX>0?event.clientX+12:rect.right+12;
+  const preferredY=event.clientY>0?event.clientY+12:rect.top+24;
+  assist.style.left=`${Math.max(8,Math.min(preferredX,window.innerWidth-assist.offsetWidth-8))}px`;
+  assist.style.top=`${Math.max(8,Math.min(preferredY,window.innerHeight-assist.offsetHeight-8))}px`;
+}
+function setAssistPending(pending){
+  aiRequestPending=pending;
+  $('assistForm').querySelector('button').disabled=pending;
+  document.querySelectorAll('[data-assist-preset]').forEach(button=>button.disabled=pending);
+}
+async function requestSuggestion(instruction){
+  if(aiRequestPending||!activeNoteSelection)return;
+  const target={...activeNoteSelection};
+  const note=state.notes.find(item=>item.id===target.noteId);
+  if(!note||note.text.slice(target.start,target.end)!==target.text){$('assistStatus').textContent='原文已变化，请重新选取需要处理的文字。';return;}
+  if(target.text.length>2000){$('assistStatus').textContent='请一次选取不超过 2000 字。';return;}
+  const card=state.cards.find(item=>item.id===note.cardId);
+  setAssistPending(true);$('assistStatus').textContent='正在生成建议…';
+  try{
+    const response=await fetch('/api/rewrite-note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selectedText:target.text,noteText:note.text,instruction,topic:state.topic,card:card?{title:card.title,text:card.text,source:card.source,sourceUrl:card.sourceUrl,image:card.image}:null})});
+    const result=await response.json();if(!response.ok)throw Error(result.error||'生成失败');
+    const current=state.notes.find(item=>item.id===target.noteId);
+    if(!current)throw Error('原便签已被移除，请重新选取');
+    snapshot();
+    const count=state.notes.filter(item=>item.parentNoteId===current.id).length;
+    state.notes.push({id:uid(),parentNoteId:current.id,text:String(result.text||'').trim(),selectedText:target.text,selectionStart:target.start,selectionEnd:target.end,instruction,groupId:current.groupId||null,x:current.x+(current.cardId?245:225),y:current.y+20+count*245});
+    commit();
+  }catch(error){$('assistStatus').textContent=error.message||'生成失败，请重试';}
+  finally{setAssistPending(false);}
+}
+function adoptSuggestion(id){
+  const suggestion=state.notes.find(note=>note.id===id&&note.parentNoteId);
+  const parent=state.notes.find(note=>note.id===suggestion?.parentNoteId);
+  if(!suggestion||!parent)return;
+  if(!suggestion.text.trim()){alert('请先填写要采用的文字');return;}
+  const revised=replaceSelectedSegment(parent.text,suggestion.selectedText,suggestion.text,suggestion.selectionStart,suggestion.selectionEnd);
+  if(revised===null){alert('原便签中的目标文字已变化且无法唯一定位，请重新选取后生成建议。');return;}
+  snapshot();parent.text=revised;
+  const card=state.cards.find(item=>item.id===parent.cardId);
+  if(card){card.memo=revised;card.corrections=(card.corrections||0)+1;}
+  state.notes=state.notes.filter(note=>note.id!==id);
+  selected={kind:'note',id:parent.id};commit();
+}
+function discardSuggestion(id){
+  if(!state.notes.some(note=>note.id===id&&note.parentNoteId))return;
+  snapshot();state.notes=state.notes.filter(note=>note.id!==id);
+  if(selected?.id===id)selected=null;
+  commit();
+}
+async function refreshRelevance(id){
+  const card=state.cards.find(item=>item.id===id);if(!card)return;
+  const topic=state.topic,corrections=card.corrections;
+  const button=[...document.querySelectorAll('[data-refresh-relevance]')].find(item=>item.dataset.refreshRelevance===id);
+  if(button){button.disabled=true;button.textContent='评估中…';}
+  try{
+    const response=await fetch('/api/interpret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:card.text,memo:card.memo,image:card.image,topic,groups:state.groups})});
+    const result=await response.json();if(!response.ok)throw Error(result.error||'评估失败');
+    if(result.mode!=='ai')throw Error('请先配置模型 API Key 后重启应用');
+    if(state.topic!==topic||!state.cards.includes(card)||card.corrections!==corrections)throw Error('主题或卡片已变化，请重新评估');
+    snapshot();card.relevance=result.relevance;card.relevanceReason=result.reason;card.relevanceTopic=topic;commit();
+  }catch(error){alert(error.message||'评估失败');if(button){button.disabled=false;button.textContent='重新评估';}}
+}
+$('assistClose').onclick=hideSelectionAssist;
+document.querySelectorAll('[data-assist-preset]').forEach(button=>button.onclick=()=>requestSuggestion(button.dataset.assistPreset));
+$('assistForm').onsubmit=event=>{event.preventDefault();const instruction=$('assistInstruction').value.trim();if(instruction)requestSuggestion(instruction);};
 function focusItem(id){const item=[...state.cards,...state.groups,...state.notes].find(v=>v.id===id);if(!item)return;if(state.cards.includes(item)&&item.hidden){showCard(id);return;}selected={id,kind:state.cards.includes(item)?'card':state.groups.includes(item)?'group':'note'};selectedCards=state.cards.includes(item)?new Set([id]):new Set();pan={x:Math.max(10,$('viewport').clientWidth/2-item.x*scale-140),y:Math.max(10,$('viewport').clientHeight/2-item.y*scale-100)};render();}
 function worldPoint(event){const rect=$('viewport').getBoundingClientRect();return{x:(event.clientX-rect.left-pan.x)/scale,y:(event.clientY-rect.top-pan.y)/scale};}
 function startDrag(event){
@@ -283,8 +415,12 @@ window.addEventListener('pointerup',event=>{
       item.groupId=hit?.id||null;
       if(drag.kind==='card'){
         item.corrections=(item.corrections||0)+1;
-        const note=state.notes.find(n=>n.cardId===item.id);
-        if(note){note.x+=movedX;note.y+=movedY;note.groupId=item.groupId;}
+        for(const note of notesForCard(item.id)){note.x+=movedX;note.y+=movedY;note.groupId=item.groupId;}
+      }
+      if(drag.kind==='note'&&!item.parentNoteId){
+        for(const suggestion of state.notes.filter(note=>note.parentNoteId===item.id)){
+          suggestion.x+=movedX;suggestion.y+=movedY;suggestion.groupId=item.groupId;
+        }
       }
     }
     commit();
@@ -329,7 +465,7 @@ document.addEventListener('keydown',event=>{
 function setTool(next){tool=next;hideSelectionMenu();$('selectTool').classList.toggle('active',next==='select');$('panTool').classList.toggle('active',next==='pan');}
 $('selectTool').onclick=()=>setTool('select');$('panTool').onclick=()=>setTool('pan');
 function zoomTo(next){scale=Math.min(1.7,Math.max(.35,next));render();}
-$('zoomIn').onclick=()=>zoomTo(scale*1.2);$('zoomOut').onclick=()=>zoomTo(scale/1.2);$('fitView').onclick=()=>{const visibleCards=state.cards.filter(card=>!card.hidden),visibleNotes=state.notes.filter(note=>!note.cardId||visibleCards.some(card=>card.id===note.cardId));const maxX=Math.max(1100,...state.groups.map(g=>g.x+g.w),...visibleCards.map(c=>c.x+300),...visibleNotes.map(n=>n.x+220));const maxY=Math.max(650,...state.groups.map(g=>g.y+g.h),...visibleNotes.map(n=>n.y+180));scale=Math.min(1,$('viewport').clientWidth/(maxX+50),$('viewport').clientHeight/(maxY+50));pan={x:20,y:20};render()};
+$('zoomIn').onclick=()=>zoomTo(scale*1.2);$('zoomOut').onclick=()=>zoomTo(scale/1.2);$('fitView').onclick=()=>{const visibleCards=state.cards.filter(card=>!card.hidden),visibleNotes=state.notes.filter(visibleNote);const maxX=Math.max(1100,...state.groups.map(g=>g.x+g.w),...visibleCards.map(c=>c.x+300),...visibleNotes.map(n=>n.x+(n.parentNoteId?260:220)));const maxY=Math.max(650,...state.groups.map(g=>g.y+g.h),...visibleNotes.map(n=>n.y+220));scale=Math.min(1,$('viewport').clientWidth/(maxX+50),$('viewport').clientHeight/(maxY+50));pan={x:20,y:20};render()};
 $('viewport').addEventListener('wheel',event=>{if(event.ctrlKey){event.preventDefault();zoomTo(scale*(event.deltaY<0?1.1:.9))}},{passive:false});
 $('addGroup').onclick=()=>openTextDialog({title:'新分组名称',onSave:name=>{snapshot();state.groups.push({id:uid(),name,description:'',x:150-pan.x/scale,y:130-pan.y/scale,w:440,h:440});commit();}});
 $('addNote').onclick=()=>openTextDialog({title:'写下对素材的想法',multiline:true,onSave:text=>{snapshot();state.notes.push({id:uid(),text,x:200-pan.x/scale,y:180-pan.y/scale,groupId:null});commit();}});
@@ -344,10 +480,23 @@ function editNote(id){
     commit();
   }});
 }
-function openEdit(id){editing=id;const card=state.cards.find(c=>c.id===id);$('editTitle').value=card.title;$('editText').value=card.text;$('editSource').value=card.source;$('editSourceUrl').value=card.sourceUrl||'';$('editMemo').value=card.memo;$('editTags').value=card.tags.join('，');$('editIntent').value=card.intent;$('editGroup').innerHTML='<option value="">未分组</option>'+state.groups.map(g=>`<option value="${clean(g.id)}">${clean(g.name)}</option>`).join('');$('editGroup').value=card.groupId||'';$('editStatus').value=card.status;$('editDialog').showModal()}
+function openEdit(id){editing=id;const card=state.cards.find(c=>c.id===id);$('editTitle').value=card.title;$('editText').value=card.text;$('editSource').value=card.source;$('editSourceUrl').value=card.sourceUrl||'';$('editMemo').value=card.memo;$('editTags').value=card.tags.join('，');$('editRelevance').value=card.relevance||'';$('editRelevanceReason').value=card.relevanceReason||'';$('editGroup').innerHTML='<option value="">未分组</option>'+state.groups.map(g=>`<option value="${clean(g.id)}">${clean(g.name)}</option>`).join('');$('editGroup').value=card.groupId||'';$('editStatus').value=card.status;$('editDialog').showModal()}
 $('editClose').onclick=()=>$('editDialog').close();
 $('editDelete').onclick=()=>deleteCard(editing);
-$('editForm').onsubmit=event=>{event.preventDefault();snapshot();const card=state.cards.find(c=>c.id===editing);card.title=$('editTitle').value.trim();card.text=$('editText').value.trim();card.source=$('editSource').value.trim();card.sourceUrl=$('editSourceUrl').value.trim();card.memo=$('editMemo').value.trim();card.tags=$('editTags').value.split(/[,，]/).map(t=>t.trim()).filter(Boolean);card.intent=$('editIntent').value.trim();card.groupId=$('editGroup').value||null;card.status=$('editStatus').value;card.corrections=(card.corrections||0)+1;syncMemoNote(card);$('editDialog').close();commit()};
+$('editForm').onsubmit=event=>{
+  event.preventDefault();snapshot();
+  const card=state.cards.find(c=>c.id===editing);
+  const nextText=$('editText').value.trim(),nextMemo=$('editMemo').value.trim();
+  const nextRelevance=$('editRelevance').value,nextReason=$('editRelevanceReason').value.trim();
+  if(nextRelevance!==card.relevance||nextReason!==(card.relevanceReason||''))card.relevanceTopic=state.topic;
+  else if(nextText!==card.text||nextMemo!==card.memo)card.relevanceTopic=null;
+  card.title=$('editTitle').value.trim();card.text=nextText;card.source=$('editSource').value.trim();
+  card.sourceUrl=$('editSourceUrl').value.trim();card.memo=nextMemo;
+  card.tags=$('editTags').value.split(/[,，]/).map(t=>t.trim()).filter(Boolean);
+  card.relevance=nextRelevance;card.relevanceReason=nextReason;
+  card.groupId=$('editGroup').value||null;card.status=$('editStatus').value;
+  card.corrections=(card.corrections||0)+1;syncMemoNote(card);$('editDialog').close();commit();
+};
 $('topic').onchange=()=>{snapshot();state.topic=$('topic').value.trim();commit()};
 $('undoBtn').onclick=()=>{if(!undo.length)return;redo.push(JSON.stringify(state));state=JSON.parse(undo.pop());selectedCards.clear();selected=null;hideSelectionMenu();commit()};
 $('redoBtn').onclick=()=>{if(!redo.length)return;undo.push(JSON.stringify(state));state=JSON.parse(redo.pop());selectedCards.clear();selected=null;hideSelectionMenu();commit()};
@@ -360,7 +509,7 @@ $('addCard').onclick=()=>startCapture();
 $('captureText').onclick=async()=>{try{const text=await navigator.clipboard.readText();if(!text.trim())throw Error('剪贴板里没有文字');startCapture(text,null,'剪贴板选中文字')}catch(error){alert(`读取剪贴板失败：${error.message}。请使用画布底部的“＋”手动添加。`)}};
 async function saveCapture(item,memo,closeDialog=false){
   if(!memo)return;
-  snapshot();const tags=[...new Set((state.topic.match(/[\p{Script=Han}]{2,4}/gu)||[]).slice(0,2))];
+  snapshot();const topicAtCapture=state.topic;const tags=[...new Set((state.topic.match(/[\p{Script=Han}]{2,4}/gu)||[]).slice(0,2))];
   const sourceTitle=String(item.sourceTitle||'').replace(/\s+[-–|]\s+(Google Chrome|Microsoft Edge|Brave|Mozilla Firefox)$/i,'').trim();
   const title=(item.text?.trim()||sourceTitle||(item.image?'截图素材':'新素材')).slice(0,60);
   const card={id:uid(),title,text:item.text||'',source:item.source||'来源未记录',sourceTitle:item.sourceTitle||'',sourceUrl:item.sourceUrl||'',memo,tags,intent:inferIntent(memo),interpretMode:'rule',groupId:null,status:/以后|未来|下次/.test(memo)?'future':'current',image:item.image,x:Math.max(30,160-pan.x/scale)+state.cards.length*30,y:Math.max(70,150-pan.y/scale)+state.cards.length*20,createdAt:item.createdAt||Date.now(),corrections:0};
@@ -368,16 +517,13 @@ async function saveCapture(item,memo,closeDialog=false){
   if(card.groupId){const group=state.groups.find(g=>g.id===card.groupId);card.x=group.x+30+(state.cards.filter(c=>c.groupId===group.id).length%2)*295;card.y=group.y+55+Math.floor(state.cards.filter(c=>c.groupId===group.id).length/2)*280}
   state.cards.push(card);syncMemoNote(card);if(closeDialog)$('captureDialog').close();commit();focusItem(card.id);
   try{
-    const response=await fetch('/api/interpret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:card.text,memo:card.memo,image:card.image,topic:state.topic,groups:state.groups})});
+    const response=await fetch('/api/interpret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:card.text,memo:card.memo,image:card.image,topic:topicAtCapture,groups:state.groups})});
     const result=await response.json();if(!response.ok)throw Error(result.error);
-    if(result.mode==='ai'&&state.cards.includes(card)&&card.corrections===0){snapshot();card.title=result.title;card.intent=result.intent;card.tags=result.tags;card.interpretMode='ai';if(result.groupId){card.groupId=result.groupId;const group=state.groups.find(g=>g.id===result.groupId);const oldX=card.x,oldY=card.y;card.x=group.x+25;card.y=group.y+60+state.cards.filter(c=>c.groupId===group.id&&c.id!==card.id).length*170;const note=state.notes.find(n=>n.cardId===card.id);if(note){note.x+=card.x-oldX;note.y+=card.y-oldY;note.groupId=card.groupId;}}commit()}
+    if(result.mode==='ai'&&state.cards.includes(card)&&card.corrections===0){snapshot();card.title=result.title;card.relevance=result.relevance;card.relevanceReason=result.reason;card.relevanceTopic=topicAtCapture;card.tags=result.tags;card.interpretMode='ai';if(result.groupId){card.groupId=result.groupId;const group=state.groups.find(g=>g.id===result.groupId);const oldX=card.x,oldY=card.y;card.x=group.x+25;card.y=group.y+60+state.cards.filter(c=>c.groupId===group.id&&c.id!==card.id).length*170;const note=state.notes.find(n=>n.cardId===card.id);if(note){note.x+=card.x-oldX;note.y+=card.y-oldY;note.groupId=card.groupId;}}commit()}
   }catch(error){console.warn('素材理解暂时不可用',error)}
 }
 $('captureForm').onsubmit=event=>{event.preventDefault();saveCapture(capture,$('captureMemo').value.trim(),true).catch(error=>alert(`保存素材失败：${error.message}`))};
 $('captureScreen').onclick=()=>window.contextyDesktop?window.contextyDesktop.startCapture():alert('请先运行 npm run desktop，再在任意窗口按 Ctrl+Shift+S 框选屏幕区域。');
 window.contextyDesktop?.onCapture(item=>{saveCapture(item,item.memo).catch(error=>alert(`保存截图失败：${error.message}`))});
-$('newChat').onclick=()=>alert('这一轮先完成素材捕捉和画布整理，聊天功能留到下一轮。');
-$('chatForm').onsubmit=event=>{event.preventDefault();alert('这一轮先完成素材画布，聊天功能尚未接入。')};
-$('modeNote').textContent='聊天功能将在画布核对后接入。';
 $('tabTimeline').onclick=()=>alert('时间线不在本轮功能范围内。');
 render();

@@ -33,3 +33,31 @@
 .selection-menu button{display:block;width:100%;border:0;border-radius:5px;background:transparent;padding:8px 9px;text-align:left;font-size:11px;color:#31445d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .selection-menu button:hover{background:#edf4ff;color:#245c9d}
 .selection-menu button.danger:hover{background:#fff0ef;color:#a7433d}
+.shell{grid-template-columns:178px 265px minmax(470px,1fr)}
+@media(max-width:1150px){.shell{grid-template-columns:140px 220px minmax(380px,1fr)}}
+@media(max-width:850px){.shell{grid-template-columns:190px minmax(400px,1fr)}}
+.sticky-note .note-text{display:block;width:100%;min-height:105px;max-height:430px;resize:vertical;border:0;outline:0;background:transparent;color:#33291e;font-size:inherit;font-weight:inherit;line-height:inherit;white-space:pre-wrap;overflow-wrap:anywhere;cursor:text}
+.sticky-note .note-text:focus{outline:1px solid #bb8753;outline-offset:4px}
+.sticky-note.suggestion-note{width:250px;min-height:205px;background:#f1f7ff;border-color:#9fc2eb;padding:13px;color:#253c5d}
+.suggestion-note .note-text{min-height:115px;color:#253c5d;font-size:13px;font-weight:600}
+.suggestion-note small{display:block;margin-bottom:6px;color:#4977af;font-size:11px;font-weight:800}
+.suggestion-note .suggestion-request{margin-bottom:8px;color:#667e9f;font-size:10px;line-height:1.35;overflow-wrap:anywhere}
+.suggestion-actions{display:flex;gap:7px;margin-top:9px}
+.suggestion-actions button{flex:1;border:1px solid #bed1e9;border-radius:6px;padding:6px 4px;background:#fff;color:#41658f;font-size:10px;font-weight:750}
+.suggestion-actions .adopt{border-color:#367cc6;background:#367cc6;color:#fff}
+.suggestion-actions button:hover{filter:brightness(.94)}
+.note-links>path.suggestion-link{stroke:#5983bc;stroke-dasharray:5 4}
+.selection-assist[hidden]{display:none}
+.selection-assist{position:fixed;z-index:32;width:305px;padding:12px;border:1px solid #b8cbe3;border-radius:10px;background:#fff;box-shadow:0 12px 32px #253b5a3d;font-size:12px}
+.selection-assist-head{display:flex;align-items:center;justify-content:space-between;color:#2f527d}
+.selection-assist-head button{border:0;background:transparent;font-size:19px;color:#7b8da3}
+.assist-snippet{max-height:64px;overflow:auto;margin:8px 0;padding:7px 8px;border-left:3px solid #80aee4;background:#f2f7fd;color:#526983;line-height:1.5;white-space:pre-wrap}
+.assist-presets{display:flex;gap:6px;margin-bottom:8px}
+.assist-presets button{border:1px solid #bfd4eb;border-radius:6px;padding:6px 8px;background:#f7fbff;color:#3d6ba1;font-size:11px}
+#assistForm{display:flex;gap:6px}
+#assistForm input{flex:1;min-width:0;border:1px solid #cbd9e8;border-radius:6px;padding:7px;font-size:11px}
+#assistForm button{flex:none;border:0;border-radius:6px;padding:7px 9px;background:#2f6fb5;color:#fff;font-size:11px}
+#assistForm button:disabled,.assist-presets button:disabled{opacity:.55;cursor:wait}
+#assistStatus{min-height:0;margin:6px 0 0;color:#a6433a;font-size:10px;line-height:1.4}
+.card-ai button[data-refresh-relevance]{float:right;border:0;background:transparent;color:#587fc0;font-size:10px;padding:0 2px}
+.card-ai button[data-refresh-relevance]:hover{text-decoration:underline}
